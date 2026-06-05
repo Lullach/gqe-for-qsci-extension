@@ -13,7 +13,7 @@ For full details, see the paper: *Generative Circuit Design for Quantum-Selected
 
 1. [Overview](#overview)
 2. [Methods and Models](#methods-and-models)
-   - [GPT-2 Policy Network](#gpt-2-policy-network)
+   - [Policy Models](#policy-models)
    - [Operator Pool](#operator-pool)
    - [Policy Optimization: GRPO and GSPO](#policy-optimization-grpo-and-gspo)
    - [Temperature Scheduling](#temperature-scheduling)
@@ -35,10 +35,10 @@ For full details, see the paper: *Generative Circuit Design for Quantum-Selected
 
 This project trains a generative model to **design quantum circuits** that prepare low-energy electronic states of molecules. The workflow is:
 
-1. A **GPT-2 policy model** autoregressively selects a sequence of quantum gates (parameterized Pauli evolution operators) from a chemistry-informed operator pool.
+1. A **policy model** (GPT-2, discrete diffusion, or GNN) generates gate-index sequences selecting operators from a chemistry-informed pool.
 2. The resulting quantum circuit is simulated with **CUDA-Q**, producing a probability distribution over computational basis states (bitstrings).
 3. The most probable bitstrings are interpreted as Slater determinants, and a **QSCI diagonalization** refines the energy estimate by building and diagonalizing the molecular Hamiltonian in the sampled subspace.
-4. The energy serves as a reward signal: a **policy gradient loss** (GRPO or GSPO) updates the GPT-2 model to generate circuits that yield lower energies.
+4. The energy serves as a reward signal: a **policy gradient loss** (GRPO or GSPO) updates the model to generate circuits that yield lower energies.
 
 The feedback loop connects classical deep learning with quantum chemistry simulation, iteratively improving both the circuits and the energy estimates.
 
@@ -46,7 +46,11 @@ The feedback loop connects classical deep learning with quantum chemistry simula
 
 ## Methods and Models
 
-### GPT-2 Policy Network
+### Policy Models
+
+Four policy architectures are available, all implementing the same `Policy` interface (`gqe_qsci/gqe/models/policy.py`). GPT-2 generates circuits autoregressively; the diffusion and GNN models generate full sequences non-autoregressively via `sample_sequence()`.
+
+#### GPT-2 Policy Network
 
 **Theory.** The Transformer architecture ([Vaswani et al., 2017](https://arxiv.org/abs/1706.03762)) processes sequences via stacked self-attention and feed-forward blocks. GPT-2 is a decoder-only variant that performs **autoregressive generation**: at each step, it attends to all previous tokens and produces a probability distribution over the next token. This makes it well-suited for sequential decision-making, where each "token" is a gate selected from a discrete operator vocabulary.
 
@@ -57,6 +61,67 @@ The feedback loop connects classical deep learning with quantum chemistry simula
 - **KV caching**: Incremental decoding uses key/value caches for efficient autoregressive generation.
 - **`act(state, temperature)`**: Generates a complete gate-index sequence of length `ngates` by sampling from the softmax distribution with the given temperature.
 - **`log_prob(indices, temperature)`**: Computes per-step log-probabilities for a batch of existing sequences, used during the policy gradient update.
+
+Select with `model=gpt2`.
+
+---
+
+#### Discrete Diffusion Policy Networks
+
+All diffusion models use a **Transformer Encoder** (bidirectional, non-causal) as the denoiser, making them naturally suited for predicting masked positions from full context. Three variants are available:
+
+##### CircuitDiffusionModelSimple (`model=diffusion`)
+
+The original simplified model, kept for comparison and backward compatibility. Sampling starts from uniformly random tokens and replaces all positions at every denoising step — no principled forward process. `log_prob` is a simplified proxy evaluated at an all-zero context. **Not recommended for new experiments.**
+
+##### CircuitDiffusionModelAbsorbing (`model=diffusion_absorbing`)
+
+**Theory.** Implements absorbing diffusion ([D3PM, Austin et al., 2021](https://arxiv.org/abs/2107.03006) / MDLM-style). The forward process independently masks each gate with probability $(1 - \alpha_t)$ under a noise schedule:
+
+$$q(x_t | x_0): \text{each token masked with prob } (1 - \alpha_t), \quad \alpha_0 = 1,\ \alpha_T = 0$$
+
+The reverse process uses the exact closed-form posterior $q(x_{t-1} | x_t, \hat{x}_0)$, revealing masked positions progressively from $t = T$ down to $t = 1$.
+
+**log_prob.** Estimated via the denoising ELBO averaged over all $T$ timesteps. Corruption masks are **pre-sampled** once during rollout collection (`sample_masks()`) and stored in the replay buffer, making the GRPO importance-weight ratio $\exp(\log p_\text{new} - \log p_\text{old})$ deterministic and stable across policy updates.
+
+**Noise schedule.** Configurable as `cosine` (recommended) or `linear` via `noise_schedule`.
+
+**Architecture.** Transformer Encoder, default hidden_size=256, 8 layers, 8 heads, $T=16$ steps (see `configs/model/diffusion_absorbing_matched.yaml`).
+
+##### CircuitDiffusionModelSingleShot (`model=diffusion_singleshot`)
+
+**Theory.** Classical analogue of the USS (Unitary Single-Sampling) architecture from *Quantum Denoising Diffusion Models* ([Kölle et al., 2024](https://arxiv.org/abs/2401.07049)). The entire reverse process collapses into **one transformer forward pass**: the model predicts all gate positions simultaneously from the fully-masked sequence at $t = T$, without iterative unmasking.
+
+**log_prob.** Exact (no ELBO averaging), fully deterministic — the best possible importance-weight stability for GRPO.
+
+**Trade-offs.**
+
+| | Absorbing (T=16) | Single-Shot |
+|---|---|---|
+| Inference | T forward passes | 1 forward pass (T× faster) |
+| log_prob | ELBO approximation | Exact |
+| Task difficulty | Easier (step-by-step) | Harder (direct mapping) |
+
+Weights are architecturally compatible with the absorbing model; warm-starting from a trained absorbing checkpoint is supported via `trainer.warm_start_checkpoint`.
+
+---
+
+#### GNN Policy Network (`model=gnn_absorbing`)
+
+**Theory.** Replaces the Transformer Encoder denoiser with **Graph Attention Network** ([GAT, Veličković et al., 2018](https://arxiv.org/abs/1710.10903)) layers. Gate positions are nodes; edges encode positional structure via a configurable graph topology.
+
+**Motivation.** A GNN allows domain knowledge to be encoded directly into the graph structure, rather than relying solely on positional embeddings. Two graph types are supported:
+
+| Graph type | Edges | Character |
+|---|---|---|
+| `chain` (default) | bidirectional $i \leftrightarrow i+1$ | Encodes gate ordering; 6 layers covers the full L=10 sequence |
+| `full` | all pairs $i \to j$, $i \neq j$ | Equivalent to Transformer attention without softmax; ablation baseline |
+
+**Implementation** (`gqe_qsci/gqe/models/gnn.py`). The edge index is computed once in `__init__` and registered as a buffer (no per-forward-pass overhead). GAT layers use `concat=False` (heads averaged, not concatenated) with residual connections and per-layer LayerNorm to prevent over-smoothing in deep networks. The diffusion logic (forward process, reverse process, ELBO log_prob, mask pre-sampling) is identical to `CircuitDiffusionModelAbsorbing`.
+
+**Requirement.** Needs `torch_geometric` (`pip install torch_geometric`).
+
+---
 
 ### Operator Pool
 
@@ -86,6 +151,8 @@ where $A$ is an advantage estimate. GRPO (Group Relative Policy Optimization, [S
 $$\mathcal{L}_{\text{GRPO}} = -\mathbb{E}\left[\min\left(r_t A_t,\; \text{clip}(r_t, 1-\epsilon_l, 1+\epsilon_h) A_t\right)\right]$$
 
 where $r_t = \pi_\theta / \pi_{\theta_\text{old}}$ is the importance ratio and advantages are energy-based: lower energy → higher advantage.
+
+An **entropy regularization** bonus (coefficient `entropy_coeff`, default 0.01) is subtracted from the loss to encourage sequence diversity.
 
 **Implementation.** Both losses are in `gqe_qsci/gqe/loss.py`:
 
@@ -146,12 +213,25 @@ where $H$ is the Hamiltonian matrix projected onto the union basis and $S$ is th
 ├── configs/
 │   ├── default.yaml                 # Top-level config (ngates, qsci, sampler, …)
 │   ├── model/
-│   │   └── gpt2.yaml                # GPT-2 architecture (small: 6L-6H)
+│   │   ├── gpt2.yaml                # GPT-2 (autoregressive, 6L-6H-384d)
+│   │   ├── diffusion.yaml           # Simple diffusion (legacy, not recommended)
+│   │   ├── diffusion_absorbing.yaml         # Absorbing diffusion (small)
+│   │   ├── diffusion_absorbing_matched.yaml # Absorbing diffusion (matched to GPT-2 capacity)
+│   │   ├── diffusion_singleshot.yaml        # Single-shot diffusion
+│   │   └── gnn_absorbing.yaml       # GNN absorbing diffusion (requires torch_geometric)
 │   ├── molecule/
+│   │   ├── h2.yaml
 │   │   ├── n2.yaml                  # N2, STO-3G, 10e/8o active space
 │   │   └── phenylene-1_4-dinitrene.yaml
-│   └── trainer/
-│       └── default.yaml             # Optimizer, loss, scheduler, batch sizes
+│   ├── trainer/
+│   │   └── default.yaml             # Optimizer, loss, scheduler, batch sizes
+│   └── experiment/                  # Pre-configured experiment overrides
+│       ├── n2_l10_gpt2_paper.yaml
+│       ├── n2_l10_diffusion_paper.yaml
+│       ├── n2_l10_diffusion_absorbing_matched_30iter.yaml
+│       ├── n2_l10_diffusion_singleshot_30iter.yaml
+│       ├── n2_l10_gnn_absorbing_30iter.yaml
+│       └── …
 ├── gqe_qsci/
 │   ├── train_pipeline.py            # PyTorch Lightning TrainPipeline
 │   ├── factory.py                   # Component instantiation
@@ -160,7 +240,9 @@ where $H$ is the Hamiltonian matrix projected onto the union basis and $S$ is th
 │   ├── gqe/
 │   │   ├── models/
 │   │   │   ├── policy.py            # Abstract Policy base class
-│   │   │   └── gpt2.py             # GPT-2 policy implementation
+│   │   │   ├── gpt2.py              # GPT-2 autoregressive policy
+│   │   │   ├── diffusion.py         # Diffusion policies (Simple, Absorbing, SingleShot)
+│   │   │   └── gnn.py               # GNN absorbing diffusion policy
 │   │   ├── buffer.py               # ReplayBuffer & BufferDataset
 │   │   ├── loss.py                 # GRPOLoss, GSPOLoss
 │   │   ├── operator_pool.py        # PauliEvolutionPool, ExcitationPool
@@ -201,6 +283,7 @@ Key dependencies (see `pyproject.toml` for exact versions):
 | `pyci` | CI Hamiltonian diagonalization |
 | `mpi4py` | MPI parallelization across QPUs |
 | `wandb` | Experiment tracking |
+| `torch_geometric` | GNN models only (optional) |
 
 ---
 
@@ -230,10 +313,39 @@ docker build \
 
 All commands below assume execution inside the Docker container (or a matching local environment). The entry point is `train.py`, configured via [Hydra](https://hydra.cc/).
 
-### Basic training (N2 molecule)
+### Basic training (N2 molecule, GPT-2)
 
 ```bash
 python train.py molecule=n2
+```
+
+### Train with absorbing diffusion
+
+```bash
+python train.py molecule=n2 model=diffusion_absorbing_matched
+```
+
+### Train with single-shot diffusion
+
+```bash
+python train.py molecule=n2 model=diffusion_singleshot
+```
+
+### Train with GNN absorbing diffusion
+
+```bash
+pip install torch_geometric
+python train.py molecule=n2 model=gnn_absorbing
+```
+
+### Reproduce paper experiments
+
+```bash
+# GPT-2 paper run
+python train.py experiment=n2_l10_gpt2_paper
+
+# Diffusion paper run
+python train.py experiment=n2_l10_diffusion_paper
 ```
 
 ### Override training duration and circuit length
@@ -254,6 +366,13 @@ python train.py molecule=n2 exp_tag=my-n2-run
 python train.py molecule=n2 trainer.load_checkpoint=false
 ```
 
+### Warm-start a single-shot model from an absorbing checkpoint
+
+```bash
+python train.py molecule=n2 model=diffusion_singleshot \
+  trainer.warm_start_checkpoint=outputs/my-project/my-absorbing-run/models/last.ckpt
+```
+
 ### Run with a different operator pool
 
 ```bash
@@ -263,7 +382,7 @@ python train.py molecule=n2 operator_pool.spec=excitation
 ### Run with GSPO loss instead of GRPO
 
 ```bash
-python train.py molecule=n2 trainer.loss=gspo
+python train.py molecule=n2 trainer.loss.type=gspo
 ```
 
 ### Run with MPI (multi-GPU/QPU sampling)
@@ -300,20 +419,27 @@ Hydra configs live under `configs/`. Key parameters:
 
 | Config key | Default | Description |
 |------------|---------|-------------|
-| `molecule` | `n2` | Molecule config group (`n2`, `phenylene-1_4-dinitrene`) |
+| `molecule` | `n2` | Molecule config group (`n2`, `h2`, `phenylene-1_4-dinitrene`) |
+| `model` | `gpt2` | Policy model (`gpt2`, `diffusion_absorbing_matched`, `diffusion_singleshot`, `gnn_absorbing`, …) |
 | `ngates` | `10` | Number of gates in each generated circuit |
 | `operator_pool.spec` | `pauli_evolution` | Pool type: `pauli_evolution` or `excitation` |
 | `operator_pool.ccsd_threshold` | `1e-6` | Minimum CCSD amplitude to include an operator |
 | `qsci.max_dim` | `2000` | Maximum QSCI subspace dimension |
 | `sampler.shots` | `100000` | Quantum circuit measurement shots |
-| `trainer.max_iters` | `100` | Total training epochs |
+| `trainer.max_iters` | `15` | Total training epochs |
 | `trainer.num_samples` | `10` | Rollout circuits per epoch |
 | `trainer.step_per_epoch` | `30` | Gradient update steps per epoch |
 | `trainer.warmup_size` | `10` | Buffer size before training starts |
-| `trainer.loss` | `grpo` | Loss function: `grpo` or `gspo` |
-| `model.repetition_penalty` | `1.2` | GPT-2 repetition penalty |
+| `trainer.loss.type` | `grpo` | Loss function: `grpo` or `gspo` |
+| `trainer.entropy_coeff` | `0.01` | Entropy regularization coefficient (0 to disable) |
+| `trainer.warm_start_checkpoint` | `null` | Path to a `.ckpt` to load model weights from before training |
+| `model.repetition_penalty` | `1.2` | GPT-2 only: repetition penalty on already-selected gates |
+| `model.noise_schedule` | `cosine` | Diffusion models: `cosine` or `linear` |
+| `model.diffusion_steps` | varies | Diffusion models: number of denoising steps T |
 | `scheduler.target_var` | `1e-5` | Energy variance target for `VarBasedScheduler` |
 | `exp_tag` | auto | Experiment tag (determines output directory) |
+
+Pre-configured experiment files in `configs/experiment/` bundle molecule, model, and trainer settings for reproducible runs.
 
 ---
 

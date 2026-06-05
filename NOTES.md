@@ -255,6 +255,76 @@ gates, more noise).
 Both graphs use the same node set (L circuit positions), so they slot in as
 additional edge types in the GNN alongside the base chain edges.
 
+### Reservoir Computing (Echo State Network)
+
+Replace the trained Transformer encoder with a **fixed random recurrent network**
+(reservoir). Only the linear readout layer mapping reservoir states to gate logits
+is trained — the reservoir itself is never updated.
+
+**How it works:**
+Input tokens are embedded and fed sequentially into a large random RNN. The
+reservoir projects the input into a high-dimensional space through its nonlinear
+recurrent dynamics. A linear layer trained on top reads out gate logits. Training
+is just a linear regression — milliseconds, no GPU needed.
+
+**Why it is interesting here:**
+- L=10 is short enough that an RNN reservoir can capture the full sequence without
+  vanishing gradient issues
+- Near-zero training cost — useful for rapid ablations
+- Primary scientific value: a **controlled baseline**. If the trained Transformer
+  only marginally outperforms a random reservoir, the learned representations are
+  not adding much. If it wins decisively, the inductive bias of training is
+  confirmed to matter.
+
+**Implementation:**
+Swap `self.denoiser = nn.TransformerEncoder(...)` in `_CircuitDiffusionBase` for a
+fixed `nn.RNN` or `nn.GRU` with `requires_grad=False` on all parameters. Keep only
+`self.output = nn.Linear(hidden_size, vocab_size)` trainable. No new dependencies.
+
+**Expected outcome:** likely underperforms the Transformer, but informative as a
+lower bound. The quantum reservoir computing (SYK) connection below is a
+physically motivated upgrade of this same idea.
+
+**References:**
+- Jaeger & Haas, *Harnessing Nonlinearity*, Science 2004 — original ESN paper
+- Lukoševičius & Jaeger, *Reservoir computing approaches*, 2009 — survey
+
+### Quantum Reservoir Computing (SYK model)
+
+The Sachdev-Ye-Kitaev (SYK) model as a quantum reservoir — a physically motivated
+upgrade of classical RC where the reservoir is a quantum many-body system.
+
+**Why SYK specifically:**
+SYK is maximally chaotic (saturates the chaos bound, Lyapunov exponent
+λ_L = 2π/β), scrambles information in O(log N) time, and has an exponentially
+large (2^(N/2)) effective Hilbert space. These properties make it nearly ideal as
+a reservoir: fast mixing, high-dimensional features, structured correlations.
+
+**Three possible connections to this project:**
+
+1. **As a fixed quantum circuit denoiser**: replace the trained Transformer with
+   SYK Hamiltonian evolution as a fixed reservoir. Only the classical readout
+   mapping quantum measurement outcomes to gate logits is trained. Combines
+   quantum expressiveness with the simplicity of RC.
+
+2. **As inspiration for the operator pool**: SYK's all-to-all random Pauli
+   interactions resemble a richly connected operator pool. An SYK-inspired pool
+   might explore more of Hilbert space per gate than a standard UCCSD pool.
+
+3. **As a benchmark Hamiltonian**: use the SYK model itself as the target
+   molecule — find its ground state via GQE-QSCI. A natural physics experiment
+   given the connection.
+
+**Main challenge:** SYK requires all-to-all connectivity (every qubit pairs with
+every other), which is expensive on real hardware. Sparse-SYK approximations
+(chunked or k-local SYK) trade some scrambling efficiency for hardware feasibility.
+
+**References:**
+- Sachdev & Ye, *Gapless spin-fluid ground state*, PRL 1993
+- Kitaev, KITP talks 2015 — modern SYK formulation
+- Fujii & Nakajima, *Harnessing disordered quantum dynamics*, PRX 2017 — QRC
+- Kobayashi et al., various QRC papers using SYK-like systems
+
 ### 1-D Convolutional network
 
 - Replace attention with dilated non-causal convolutions (similar to WaveNet).
