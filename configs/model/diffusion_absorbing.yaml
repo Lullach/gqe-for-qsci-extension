@@ -1,0 +1,17 @@
+# Absorbing diffusion model with a principled forward/reverse process.
+# Extends the simple model with:
+#   - a [MASK] token and cosine noise schedule for the forward process
+#   - a correct reverse process (only reveals masked positions per step)
+#   - a proper ELBO-based log_prob (averaged over all timesteps)
+#
+# Key knobs
+# ---------
+# diffusion_steps : number of denoising steps T (increase for a finer process)
+# noise_schedule  : "cosine" (recommended) or "linear"
+_target_: gqe_qsci.gqe.models.diffusion.CircuitDiffusionModelAbsorbing
+hidden_size: 128
+num_layers: 4
+num_heads: 4
+diffusion_steps: 8
+noise_schedule: cosine
+dropout: 0.1

@@ -1,0 +1,27 @@
+# GNN absorbing diffusion model.
+#
+# Identical forward/reverse process to diffusion_absorbing_matched but
+# replaces the TransformerEncoder denoiser with GAT (Graph Attention Network)
+# layers on a chain graph over the L gate positions.
+#
+# num_layers=6: GNN needs more layers than Transformer because each layer
+#   propagates information only 1 hop. 6 layers covers the full L=10 sequence.
+# hidden_size=128: smaller than diffusion_absorbing_matched (256) since the
+#   GNN is a different architecture; use gnn_absorbing_matched.yaml for a
+#   capacity-matched variant.
+# graph_type: "chain" (recommended) or "full" (ablation baseline).
+#
+# Requires torch_geometric — install with:
+#   pip install torch_geometric
+# or prefix the docker run command with:
+#   pip install torch_geometric &&
+#
+# Use config  model=gnn_absorbing  to select this variant.
+_target_: gqe_qsci.gqe.models.gnn.CircuitGNNModelAbsorbing
+hidden_size: 128
+num_layers: 6
+num_heads: 4
+diffusion_steps: 16
+noise_schedule: cosine
+dropout: 0.1
+graph_type: chain

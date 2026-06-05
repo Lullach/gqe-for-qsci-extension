@@ -10,6 +10,8 @@
 # Changes made: Add factory methods for model, molecule, logger,
 # operator_pool, and qsci_pipeline construction.
 
+import logging
+
 import cudaq
 from hydra.utils import instantiate
 
@@ -19,6 +21,9 @@ from gqe_qsci.gqe.sampler import Sampler
 from gqe_qsci.qsci.pipeline import QSCIPipeline
 from gqe_qsci.wandb_logger import Logger
 
+_log = logging.getLogger(__name__)
+
+
 class Factory:
     def __init__(self):
         self.molecule = None
@@ -27,8 +32,8 @@ class Factory:
 
     def create_model(self, cfg):
         vocab_size = self.create_operator_pool(cfg).get_vocab_size()
-        print(f"Vocab size: {vocab_size}")
         cfg.vocab_size = vocab_size
+        _log.info("Vocab size: %d", vocab_size)
         return instantiate(cfg.model, vocab_size=vocab_size, ngates=cfg.ngates)
 
     def create_temperature_scheduler(self, cfg):
@@ -50,10 +55,10 @@ class Factory:
                 reference_energies[key] = molecule.hf.e_tot
             elif key == "R-CASCI":
                 reference_energies[key] = molecule.compute_casci()
-                print(f"CASCI Energy: {reference_energies[key]}")
+                _log.info("CASCI Energy: %f", reference_energies[key])
             elif key == "R-CCSD":
                 reference_energies[key] = molecule.compute_ccsd()
-                print(f"CCSD Energy: {reference_energies[key]}")
+                _log.info("CCSD Energy: %f", reference_energies[key])
         return Logger(reference_energies=reference_energies)
         
     def create_loss_fn(self, cfg):

@@ -1,0 +1,33 @@
+# @package _global_
+# Paper-reproduction settings for N2 (10e, 8o).
+# Matches the key parameters from Figure 3 of the GQE-QSCI paper:
+#   - shots=1000 per circuit  (low enough that random circuits don't saturate dmax)
+#   - max_dim=170             (paper's d_max constraint)
+#   - max_iters=100           (paper's iteration count)
+# Uses the newest diffusion model: diffusion_absorbing_matched (T=16, 256-dim, 8 layers).
+defaults:
+  - override /molecule: n2
+  - override /model: diffusion_absorbing_matched
+
+exp_tag: n2-L10-diffusion-paper
+ngates: 10
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-paper-settings
+  tags: ["n2", "L10", "100iter", "diffusion", "absorbing-diffusion", "T16", "matched", "dmax170", "paper-settings"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 5
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

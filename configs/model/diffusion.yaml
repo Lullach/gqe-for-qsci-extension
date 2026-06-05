@@ -1,0 +1,8 @@
+# Original simplified diffusion model (kept for comparison / backward compat).
+# For the proper absorbing diffusion model use:  model=diffusion_absorbing
+_target_: gqe_qsci.gqe.models.diffusion.CircuitDiffusionModelSimple
+hidden_size: 128
+num_layers: 4
+num_heads: 4
+diffusion_steps: 8
+dropout: 0.1

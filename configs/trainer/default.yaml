@@ -1,12 +1,20 @@
 seed: 32
-max_iters: 100
+max_iters: 15
 num_samples: 10     # number of samples to generate in each iteration
 batch_size: 10       # batch size should be equal to num_samples for online training
 step_per_epoch: 30   # number of policy updates in each iteration
 warmup_size: 10
 buffer_size: 10      # buffer size should be equal to num_samples for online training
 load_checkpoint: true
+# Optional path to a .ckpt file whose model weights are loaded before training
+# starts (warm-start / consistency-model distillation). Optimizer state and
+# epoch counters are NOT restored — only the model parameters.
+# Set to a path string to enable, leave null to disable.
+warm_start_checkpoint: null
 checkpoint_every_n_iters: 10
+accelerator: auto
+devices: 1
+precision: 32-true
 optimizer: 
   lr: 5e-6
   cls: AdamW
@@ -15,6 +23,9 @@ loss:
   type: "grpo"
   clip_grpo_low: 0.2
   clip_grpo_high: 0.28
+# Entropy regularisation bonus subtracted from the GRPO loss.
+# Encourages sequence diversity; set to 0.0 to disable.
+entropy_coeff: 0.01
 temperature_scheduler:
   _target_: gqe_qsci.gqe.scheduler.VarBasedScheduler
   initial: 0.5

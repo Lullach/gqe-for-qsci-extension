@@ -10,13 +10,18 @@
 # Changes made: add refinement post-processing and Weights & Biases logging.
 
 
+import logging
+import os
+
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
 import random
 import pytorch_lightning as pl
 
-from gqe_qsci.gqe.buffer import ReplayBuffer, BufferDataset
+_log = logging.getLogger(__name__)
+
+from gqe_qsci.gqe.buffer import ReplayBuffer, BufferDataset, buffer_collate_fn
 from gqe_qsci.qsci.schema import QSCISampleResult
 from gqe_qsci.qsci.pipeline import as_scivector
 
@@ -43,9 +48,63 @@ class TrainPipeline(pl.LightningModule):
         run = self.logger.experiment
         run.define_metric("epoch")
         run.define_metric("*", step_metric="epoch")
+        self._apply_warm_start()
         while len(self.buffer) < self.warmup_size:
             self.collect_rollout(log=False)
         super().on_fit_start()
+
+    def _apply_warm_start(self):
+        """
+        Optionally load model weights from a previous checkpoint before training
+        begins, without restoring optimizer state or epoch counters.
+
+        This is the classical analogue of consistency-model distillation: a
+        trained absorbing-diffusion checkpoint can warm-start the single-shot
+        model because both share the same _CircuitDiffusionBase architecture.
+        Weights that don't exist in the target model (e.g. the 'alpha' schedule
+        buffer present in the absorbing model but not in the single-shot model)
+        are silently skipped via strict=False.
+
+        Set  trainer.warm_start_checkpoint  in the experiment config to enable.
+        The path should point to a PyTorch Lightning .ckpt file.
+        """
+        path = getattr(self.config.trainer, "warm_start_checkpoint", None)
+        if not path:
+            return
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"warm_start_checkpoint not found: {path}"
+            )
+        _log.info(f"Warm-starting model weights from {path}")
+        ckpt = torch.load(path, map_location="cpu")
+
+        # PL checkpoints store the full LightningModule state dict under
+        # "state_dict" with keys prefixed "model." (e.g. "model.denoiser.…").
+        full_sd = ckpt.get("state_dict", ckpt)
+        model_sd = {
+            k[len("model."):]: v
+            for k, v in full_sd.items()
+            if k.startswith("model.")
+        }
+        if not model_sd:
+            _log.warning(
+                "Warm-start: no 'model.*' keys found in checkpoint — "
+                "trying to load the dict directly."
+            )
+            model_sd = full_sd
+
+        missing, unexpected = self.model.load_state_dict(model_sd, strict=False)
+        if missing:
+            _log.info(
+                f"Warm-start: {len(missing)} missing key(s) "
+                f"(expected when architectures differ, e.g. 'alpha' buffer): "
+                f"{missing}"
+            )
+        if unexpected:
+            _log.warning(
+                f"Warm-start: {len(unexpected)} unexpected key(s): {unexpected}"
+            )
+        _log.info("Warm-start complete.")
 
     def on_train_epoch_start(self):
         qsci_result = self.collect_rollout(log=True)
@@ -72,24 +131,40 @@ class TrainPipeline(pl.LightningModule):
             )
         }
         with torch.no_grad():
-            for _ in range(self.ngates):
-                next_tokens = self.model.act(
+            if hasattr(self.model, "sample_sequence"):
+                state = self.model.sample_sequence(
                     state, self.scheduler.get_inverse_temperature()
                 )
-                state = self.update_state(state, next_tokens)
+            else:
+                for _ in range(self.ngates):
+                    next_tokens = self.model.act(
+                        state, self.scheduler.get_inverse_temperature()
+                    )
+                    state = self.update_state(state, next_tokens)
 
             qsci_result = self.qsci_pipeline.process(state)
             energies = torch.tensor(qsci_result.energies, device=self.device)
-            
+
+            # Pre-sample diffusion masks if the model supports it (Fix 4).
+            # Storing masks in the buffer makes log_prob() deterministic during
+            # the GRPO training step, stabilising the importance-weight ratio.
+            masks_all = None
+            if hasattr(self.model, "sample_masks"):
+                masks_all = self.model.sample_masks(state["idx"][:, 1:])  # (B, T, L)
+
             # log-probs under the behavior policy at rollout time
+            lp_kwargs = {} if masks_all is None else {"masks": masks_all}
             old_log_probs = self.model.log_prob(
-                state["idx"], self.scheduler.get_inverse_temperature()
+                state["idx"], self.scheduler.get_inverse_temperature(), **lp_kwargs
             )
-            for seq, energy, olp in zip(state["idx"], energies, old_log_probs):
+
+            masks_iter = masks_all if masks_all is not None else [None] * len(energies)
+            for seq, energy, olp, msk in zip(state["idx"], energies, old_log_probs, masks_iter):
                 self.buffer.push(
                     seq.detach().cpu(),
                     energy.detach().cpu(),
                     olp.detach().cpu(),
+                    msk.detach().cpu() if msk is not None else None,
                 )
             if self.best_sample is None or energies.min() < self.best_sample.energy:
                 self.best_sample = qsci_result.best_sample
@@ -106,7 +181,26 @@ class TrainPipeline(pl.LightningModule):
         for k, v in batch.items():
             if torch.is_tensor(v):
                 batch[k] = v.to(self.device)
-        full_log_probs = self.model.log_prob(batch["idx"], self.scheduler.get_inverse_temperature())
+
+        # Pass pre-sampled masks if available (Fix 4: deterministic ELBO)
+        batch_masks = batch.get("masks")   # None for GPT-2 / Simple
+        lp_kwargs = {} if batch_masks is None else {"masks": batch_masks}
+
+        # Entropy regularization coefficient (Fix 5). 0.0 disables it.
+        entropy_coeff = getattr(self.config.trainer, "entropy_coeff", 0.0)
+
+        if entropy_coeff > 0.0:
+            full_log_probs, entropy = self.model.log_prob(
+                batch["idx"], self.scheduler.get_inverse_temperature(),
+                return_entropy=True, **lp_kwargs,
+            )
+        else:
+            full_log_probs = self.model.log_prob(
+                batch["idx"], self.scheduler.get_inverse_temperature(),
+                **lp_kwargs,
+            )
+            entropy = None
+
         gate_seqs = batch["idx"][:, 1:]
         energies = batch["energy"]
         context = {
@@ -115,6 +209,16 @@ class TrainPipeline(pl.LightningModule):
             "gate_seqs": gate_seqs,
         }
         loss = self.loss_fn(full_log_probs, context)
+
+        if entropy_coeff > 0.0 and entropy is not None:
+            entropy_mean = entropy.mean()
+            self.log(
+                "trainer/entropy", entropy_mean,
+                on_step=True, on_epoch=True, prog_bar=False, logger=True,
+            )
+            # Subtract entropy bonus: encourages diversity, acts as regulariser
+            loss = loss - entropy_coeff * entropy_mean
+
         self.log("trainer/loss", loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         self.log(
             "trainer/inv temperature",
@@ -130,14 +234,12 @@ class TrainPipeline(pl.LightningModule):
         state["idx"] = torch.cat((state["idx"], next_token.unsqueeze(1)), dim=1)
         return state
 
-    def configure_optimizers(self):
-        return torch.optim.AdamW(self.model.parameters(), lr=self.config.trainer.optimizer.lr)
-    
     def train_dataloader(self):
         return DataLoader(
             BufferDataset(self.buffer, self.config.trainer.step_per_epoch),
             batch_size=self.config.trainer.batch_size,
             shuffle=False,
+            collate_fn=buffer_collate_fn,
         )
 
     def configure_optimizers(self):
@@ -158,6 +260,8 @@ class TrainPipeline(pl.LightningModule):
         checkpoint["extra_info"] = {
             "inverse_temperature": self.scheduler.get_inverse_temperature(),
             "best_sample": self.best_sample,
+            "best_local_refined": self.best_local_refined,
+            "best_global_refined": self.best_global_refined,
             "global_refined_scistates": scistate_data,
         }
         self.buffer.save(f"{self.config.output}/buffer.pkl")
@@ -165,11 +269,13 @@ class TrainPipeline(pl.LightningModule):
     def on_load_checkpoint(self, checkpoint):
         extra_info = checkpoint.get("extra_info", {})
         if "inverse_temperature" in extra_info:
-            self.scheduler.current = extra_info["inverse_temperature"]
+            self.scheduler.current_temperature = extra_info["inverse_temperature"]
         if "best_sample" in extra_info:
             self.best_sample = extra_info["best_sample"]
         if "best_local_refined" in extra_info:
             self.best_local_refined = extra_info["best_local_refined"]
+        if "best_global_refined" in extra_info:
+            self.best_global_refined = extra_info["best_global_refined"]
         if "global_refined_scistates" in extra_info:
             data = extra_info["global_refined_scistates"]
             self.qsci_pipeline.global_refined_scistates = as_scivector(data["coeffs"], data["strs"])

@@ -4,7 +4,7 @@ import functools
 import torch
 import hydra, wandb
 from omegaconf import DictConfig, OmegaConf
-from pytorch_lightning import Trainer
+from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
@@ -60,6 +60,8 @@ def setup_logger(cfg):
             ),
         save_dir=save_dir,
         name=cfg.wandb.name,
+        group=cfg.wandb.get("group", None),
+        tags=list(cfg.wandb.get("tags", [])),
         id=run_id if run_id is not None else None,
         resume='allow'
     )
@@ -72,18 +74,20 @@ def setup_logger(cfg):
 
 
 def train(cfg):
+    # Seed everything before any model weights are initialised so runs are reproducible.
+    seed_everything(cfg.trainer.seed, workers=True)
     callbacks = setup_callbacks(cfg)
     logger = setup_logger(cfg)
     training = TrainPipeline(Factory(), cfg)
-    training.set_seed(cfg.trainer.seed)
     trainer = Trainer(
         logger=logger if logger is not None else False,
         callbacks=callbacks,
         max_epochs=cfg.trainer.max_iters,
         deterministic=True, 
         reload_dataloaders_every_n_epochs=1,
-        precision="16-mixed",
-        devices=1,
+        precision=cfg.trainer.precision,
+        accelerator=cfg.trainer.accelerator,
+        devices=cfg.trainer.devices,
         log_every_n_steps=10
     )
     trainer.fit(training, ckpt_path=get_checkpoint_path(cfg))
@@ -95,3 +99,4 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
+    print("training finished")

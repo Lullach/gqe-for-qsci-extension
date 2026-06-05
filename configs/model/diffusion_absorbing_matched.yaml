@@ -1,0 +1,18 @@
+# Absorbing diffusion model — capacity-matched for T=16.
+#
+# Compared to the baseline diffusion_absorbing (T=8, 128-dim, 4 layers):
+#   - diffusion_steps doubled to 16 → finer-grained reverse process
+#   - hidden_size 128 → 256, num_layers 4 → 8, num_heads 4 → 8
+#     These scale the model so it has enough capacity to learn the harder
+#     denoising problem that comes with smaller per-step noise (smaller Δα_t).
+#   - Parameter count: ~4× the baseline, ~2× per-step denoising cost × 2× steps
+#     → roughly 4× total FLOPs per sample, comparable to a 30-epoch baseline.
+#
+# Use config  model=diffusion_absorbing_matched  to select this variant.
+_target_: gqe_qsci.gqe.models.diffusion.CircuitDiffusionModelAbsorbing
+hidden_size: 256
+num_layers: 8
+num_heads: 8
+diffusion_steps: 16
+noise_schedule: cosine
+dropout: 0.1

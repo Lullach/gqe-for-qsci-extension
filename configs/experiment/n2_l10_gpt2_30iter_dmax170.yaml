@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - override /molecule: n2
+  - override /model: gpt2
+
+exp_tag: n2-L10-gpt2-30iter-dmax170
+ngates: 10
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-dmax170-comparison
+  tags: ["n2", "L10", "30iter", "gpt2", "transformer", "dmax170"]
+trainer:
+  max_iters: 30
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 1
+  precision: 32-true
+sampler:
+  shots: 100_000
+qsci:
+  max_dim: 170

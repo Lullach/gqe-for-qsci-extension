@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - override /molecule: phenylene-1_4-dinitrene
+  - override /model: gpt2
+
+exp_tag: phenylene-gpt2-${now:%Y-%m-%d-%H-%M-%S}
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: phenylene-policy-comparison
+  tags: ["phenylene", "gpt2", "transformer", "prepared-only"]

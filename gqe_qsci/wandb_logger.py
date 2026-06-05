@@ -42,11 +42,10 @@ def extract_metrics(result: Any, *, prefix: str = "", ref_energy: dict[str, floa
 @extract_metrics.register
 def _(result: QSCISampleResult, *, prefix: str = "", ref_energy: dict[str, float] | None = None) -> dict[str, float]:
     d: dict[str, float] = {}
+    d[_prefix_key("energy", prefix)] = result.energy
     if ref_energy:
         for ref_key, ref_val in ref_energy.items():
             d[_prefix_key(f"energy - {ref_key}", prefix)] = result.energy - ref_val
-    else:
-        d[_prefix_key("energy", prefix)] = result.energy
     if result.subspace_dim is not None:
         d[_prefix_key("subspace_dim", prefix)] = result.subspace_dim
     if result.num_sampled_basis is not None:
@@ -65,12 +64,17 @@ def _(result: QSCIResult, *, prefix: str = "", ref_energy: dict[str, float] | No
     if len(result.samples) == 0:
         return {}
 
+    energy_min = min(result.energies)
     d: dict[str, float] = {}
-    d[_prefix_key("energy/min", prefix)] = min(result.energies)
+    d[_prefix_key("energy/min", prefix)] = energy_min
     d[_prefix_key("energy/mean", prefix)] = np.mean(result.energies)
     d[_prefix_key("energy/std", prefix)] = np.std(result.energies)
+    # Reference-relative gaps (same naming convention as QSCISampleResult).
+    if ref_energy:
+        for ref_key, ref_val in ref_energy.items():
+            d[_prefix_key(f"energy/min - {ref_key}", prefix)] = energy_min - ref_val
 
-    d[_prefix_key("subspace_dim/max", prefix)] = min(result.subspace_dim)
+    d[_prefix_key("subspace_dim/max", prefix)] = max(result.subspace_dim)
     d[_prefix_key("cx_count/max", prefix)] = max(result.cx_counts)
     d[_prefix_key("total_gates/max", prefix)] = max(result.total_gates)
     return d

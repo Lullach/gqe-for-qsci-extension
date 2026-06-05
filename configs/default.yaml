@@ -12,6 +12,8 @@ wandb:
   project: ${project.name}
   name: ${exp_tag}
   dir: ${output}
+  group: null
+  tags: []
 
 ngates: 10
 reference_keys: ["R-CASCI", "R-CCSD"]
@@ -38,5 +40,6 @@ defaults:
   - molecule: n2
   - trainer: default
   - _self_
+  - optional experiment: null
 
 vocab_size: 0 # Dummy, will be overwritten in factory.py

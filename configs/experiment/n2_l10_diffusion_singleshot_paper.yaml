@@ -1,0 +1,31 @@
+# @package _global_
+# Single-shot diffusion — paper-comparable settings:
+#   - 100 iterations, shots=1000, max_dim=170
+#   - joins n2-L10-paper-settings so charts overlay with GPT-2 and absorbing runs
+defaults:
+  - override /molecule: n2
+  - override /model: diffusion_singleshot
+
+exp_tag: n2-L10-diffusion-singleshot-paper
+ngates: 10
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-paper-settings
+  tags: ["n2", "L10", "100iter", "diffusion", "singleshot", "USS", "dmax170", "paper-settings"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 5
+  precision: 32-true
+  warm_start_checkpoint: null
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

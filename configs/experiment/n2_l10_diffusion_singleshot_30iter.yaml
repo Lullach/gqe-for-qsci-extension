@@ -1,0 +1,31 @@
+# @package _global_
+# Single-shot diffusion — comparable to n2_l10_gpt2_30iter and
+# n2_l10_diffusion_absorbing_matched_30iter:
+#   - 30 iterations, shots=100k, no max_dim cap (default 2000)
+#   - same W&B group so charts overlay with those two runs
+defaults:
+  - override /molecule: n2
+  - override /model: diffusion_singleshot
+
+exp_tag: n2-L10-diffusion-singleshot-30iter
+ngates: 10
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-policy-comparison
+  tags: ["n2", "L10", "30iter", "diffusion", "singleshot", "USS"]
+trainer:
+  max_iters: 30
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 1
+  precision: 32-true
+  warm_start_checkpoint: null
+sampler:
+  shots: 100_000
+# qsci.max_dim intentionally not set — uses default (2000)

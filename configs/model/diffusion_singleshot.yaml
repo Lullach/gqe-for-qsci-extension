@@ -1,0 +1,21 @@
+# Single-shot absorbing diffusion model.
+#
+# Classical analogue of the USS (Unitary Single-Sampling) architecture from
+# "Quantum Denoising Diffusion Models" (Kölle et al., 2024, arXiv:2401.07049).
+# The entire reverse process collapses to ONE transformer forward pass:
+#   x_T (all [MASK]) --single forward pass--> x_0 (clean gate sequence)
+#
+# Architecture is identical to diffusion_absorbing_matched so weights can be
+# transferred via trainer.warm_start_checkpoint for consistency-model-style
+# distillation from a pre-trained absorbing model.
+#
+# diffusion_steps only controls the time-embedding table size; the model
+# always conditions on t = diffusion_steps at both train and inference time.
+#
+# Use config  model=diffusion_singleshot  to select this variant.
+_target_: gqe_qsci.gqe.models.diffusion.CircuitDiffusionModelSingleShot
+hidden_size: 256
+num_layers: 8
+num_heads: 8
+diffusion_steps: 16
+dropout: 0.1

@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - override /molecule: h2
+  - override /model: diffusion
+
+exp_tag: h2-diffusion-${now:%Y-%m-%d-%H-%M-%S}
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: h2-policy-comparison
+  tags: ["h2", "diffusion"]
