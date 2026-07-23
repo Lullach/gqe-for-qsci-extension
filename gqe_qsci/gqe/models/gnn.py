@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
+from gqe_qsci.gqe.models.operator_scorer import OperatorScorer, SpecialTokenEmbedding
 from gqe_qsci.gqe.models.policy import Policy
 from gqe_qsci.gqe.models.diffusion import _make_alpha_schedule
 
@@ -77,6 +78,8 @@ class _CircuitGNNBase(Policy):
         dropout: float,
         graph_type: str = "chain",
         token_vocab_size: int | None = None,
+        feature_scorer: bool = False,
+        operator_features=None,
     ):
         _require_pyg()
         super().__init__()
@@ -84,11 +87,21 @@ class _CircuitGNNBase(Policy):
         self.ngates          = int(ngates)
         self.diffusion_steps = int(diffusion_steps)
         self.hidden_size     = int(hidden_size)
+        self.feature_scorer  = bool(feature_scorer)
 
         tok_vocab = token_vocab_size if token_vocab_size is not None else self.vocab_size
+        n_special = tok_vocab - self.vocab_size
 
         # Same embeddings as _CircuitDiffusionBase
-        self.token_embedding    = nn.Embedding(tok_vocab, hidden_size)
+        if self.feature_scorer:
+            if operator_features is None:
+                raise ValueError(
+                    "feature_scorer=True requires operator_features "
+                    "(factory passes pool.get_operator_features())."
+                )
+            self.token_embedding = SpecialTokenEmbedding(n_special, hidden_size)
+        else:
+            self.token_embedding = nn.Embedding(tok_vocab, hidden_size)
         self.position_embedding = nn.Embedding(self.ngates, hidden_size)
         self.time_embedding     = nn.Embedding(self.diffusion_steps + 1, hidden_size)
 
@@ -112,7 +125,10 @@ class _CircuitGNNBase(Policy):
         ])
 
         # Output projection over the real gate vocabulary
-        self.output = nn.Linear(hidden_size, self.vocab_size)
+        if self.feature_scorer:
+            self.output = OperatorScorer(operator_features, hidden_size)
+        else:
+            self.output = nn.Linear(hidden_size, self.vocab_size)
 
         # Static edge index — computed once, stored as a buffer so it moves
         # to the correct device automatically with .to(device)
@@ -150,9 +166,18 @@ class _CircuitGNNBase(Policy):
             )
         timestep = timestep.clamp(0, self.diffusion_steps)
 
+        if self.feature_scorer:
+            # Encode the menu once, use it for both input embedding and output
+            # head — feature-space weight tying.
+            keys = self.output.keys()                          # (V, H)
+            tok_emb = self.token_embedding(tokens, keys)
+        else:
+            keys = None
+            tok_emb = self.token_embedding(tokens)
+
         # Node features: sum of three embeddings  (B, L, H)
         h = (
-            self.token_embedding(tokens)
+            tok_emb
             + self.position_embedding(positions)
             + self.time_embedding(timestep).unsqueeze(1)
         )
@@ -169,13 +194,31 @@ class _CircuitGNNBase(Policy):
 
         # Reshape back to (B, L, H) and project to vocab
         h = h.view(batch_size, seq_len, -1)
+        if self.feature_scorer:
+            return self.output(h, keys=keys)                       # (B, L, vocab_size)
         return self.output(h)                                      # (B, L, vocab_size)
 
-    def act(self, state, temperature):
+    def act(self, state, inv_temperature):
         raise RuntimeError(
             f"{self.__class__.__name__} generates whole sequences via "
             "sample_sequence(); act() is not supported."
         )
+
+    def set_molecule(self, bundle):
+        """
+        Re-point at bundle's molecule. Swaps the operator menu (also the tied
+        input embedding). The chain/full edge_index is over gate POSITIONS, not
+        the vocabulary, so it is molecule-independent and untouched. Subclasses
+        with a [MASK] token update it via _refresh_mask_token().
+        """
+        if not self.feature_scorer:
+            raise RuntimeError("set_molecule requires feature_scorer=True.")
+        self.vocab_size = int(bundle.vocab_size)
+        self.output.set_features(bundle.operator_features, update_stats=False)
+        self._refresh_mask_token()
+
+    def _refresh_mask_token(self):
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +267,7 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
     If you change the absorbing logic in diffusion.py, update it here too.
     A mixin-based refactor that removes the duplication is described in NOTES.md.
 
-    Use config  model=gnn_absorbing  to select this variant.
+    Use config  model=diffusion_gnn_absorbing  to select this variant.
     """
 
     def __init__(
@@ -238,18 +281,25 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
         noise_schedule: str = "cosine",
         dropout: float = 0.1,
         graph_type: str = "chain",
+        feature_scorer: bool = False,
+        operator_features=None,
     ):
         # [MASK] token lives at index vocab_size
         super().__init__(
             vocab_size, ngates, hidden_size, num_layers,
             num_heads, diffusion_steps, dropout, graph_type,
             token_vocab_size=vocab_size + 1,
+            feature_scorer=feature_scorer,
+            operator_features=operator_features,
         )
         self.mask_token     = self.vocab_size
         self.noise_schedule = noise_schedule
 
         alpha = _make_alpha_schedule(diffusion_steps, noise_schedule)
         self.register_buffer("alpha", alpha)                       # (T+1,)
+
+    def _refresh_mask_token(self):
+        self.mask_token = self.vocab_size
 
     # --- forward process ---------------------------------------------------
 
@@ -285,7 +335,7 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
 
     # --- reverse process / sampling ----------------------------------------
 
-    def sample_sequence(self, state, temperature):
+    def sample_sequence(self, state, inv_temperature):
         """Generate gate sequence via the absorbing reverse process."""
         batch_size = state["idx"].shape[0]
         device     = state["idx"].device
@@ -301,7 +351,7 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
                 break
 
             logits  = self._logits(tokens, step)
-            x0_pred = Categorical(logits=-temperature * logits).sample()
+            x0_pred = Categorical(logits=-inv_temperature * logits).sample()
 
             alpha_t    = self.alpha[step]
             alpha_prev = self.alpha[step - 1]
@@ -333,7 +383,7 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
 
     # --- log-probability ---------------------------------------------------
 
-    def log_prob(self, indices, temperature, return_entropy=False, masks=None):
+    def log_prob(self, indices, inv_temperature, return_entropy=False, masks=None):
         """
         Denoising ELBO averaged over all T timesteps.
 
@@ -363,7 +413,7 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
                 is_masked     = ~is_clean
 
             logits     = self._logits(x_t, t)
-            log_probs  = F.log_softmax(-temperature * logits, dim=-1)
+            log_probs  = F.log_softmax(-inv_temperature * logits, dim=-1)
             token_logp = torch.gather(
                 log_probs, 2, gate_tokens.unsqueeze(-1)
             ).squeeze(-1)

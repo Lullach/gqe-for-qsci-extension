@@ -11,10 +11,12 @@
 
 
 from transformers import GPT2LMHeadModel, GPT2Config
+from torch import nn
 from torch.nn import functional as F
 from torch.distributions import Categorical
 import torch
 
+from gqe_qsci.gqe.models.operator_scorer import OperatorScorer
 from gqe_qsci.gqe.models.policy import Policy
 
 
@@ -23,20 +25,95 @@ class SmallConfig(GPT2Config):
         super().__init__(n_layer=6, n_head=6, **kwargs)
 
 
+class _FeatureWTE(torch.nn.Module):
+    """
+    Feature-based drop-in for GPT-2's ``transformer.wte``.
+
+    HuggingFace calls ``self.wte(input_ids)`` expecting (B, L) -> (B, L, H).
+    Here the embedding table is the OperatorScorer's keys, so token embeddings
+    are derived from operator features rather than looked up by index.
+    """
+
+    def __init__(self, scorer: OperatorScorer):
+        super().__init__()
+        self.scorer = scorer
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return self.scorer.keys()[input_ids]
+
+
+class _ScorerHead(torch.nn.Module):
+    """
+    Feature-based drop-in for GPT-2's ``lm_head``.
+
+    Holds the SAME OperatorScorer instance as _FeatureWTE, so input embedding and
+    output projection share one matrix — GPT-2's weight tying preserved, except
+    the tied matrix is computed from features instead of being free parameters.
+    (Registering the scorer under two parents is fine: nn.Module.parameters()
+    de-duplicates by identity, so it is optimized once.)
+    """
+
+    def __init__(self, scorer: OperatorScorer):
+        super().__init__()
+        self.scorer = scorer
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return self.scorer(hidden_states)
+
+
 class GPT2Model(GPT2LMHeadModel, Policy):
-    def __init__(self, small, repetition_penalty, vocab_size, ngates):
+    def __init__(
+        self,
+        small,
+        repetition_penalty,
+        vocab_size,
+        ngates,
+        feature_scorer: bool = False,
+        operator_features=None,
+    ):
         max_positions = int(ngates) + 1
         gpt2cfg = GPT2Config(vocab_size=vocab_size, n_positions=max_positions)
         if small:
             gpt2cfg = SmallConfig(vocab_size=vocab_size, n_positions=max_positions)
+        if feature_scorer:
+            # HF's tie_weights() would try `lm_head.weight = wte.weight`; our
+            # replacements have no .weight. We tie by sharing the scorer instead.
+            gpt2cfg.tie_word_embeddings = False
         self.repetition_penalty = repetition_penalty
         super().__init__(gpt2cfg)
         self._tril_cache = {}
 
-    def log_prob(self, indices, temperature, return_entropy=False):
+        self.feature_scorer = bool(feature_scorer)
+        if self.feature_scorer:
+            if operator_features is None:
+                raise ValueError(
+                    "feature_scorer=True requires operator_features "
+                    "(factory passes pool.get_operator_features())."
+                )
+            # Swap AFTER super().__init__() so HF's post_init()/weight init has
+            # already run over the original modules and cannot touch ours.
+            # GPT-2 is the only model with TWO vocabulary touch points; both are
+            # replaced here so nothing indexes operators by ID.
+            scorer = OperatorScorer(operator_features, gpt2cfg.n_embd)
+            self.set_input_embeddings(_FeatureWTE(scorer))   # transformer.wte
+            self.lm_head = _ScorerHead(scorer)
+
+    def set_molecule(self, bundle):
+        """
+        Re-point at bundle's molecule. wte and lm_head share ONE scorer, so
+        swapping its features updates both the input embedding and the output
+        head at once. n_positions (= ngates + 1) is molecule-independent and
+        the repetition penalty operates on token indices, so nothing else
+        changes. Never call mid-rollout.
+        """
+        if not self.feature_scorer:
+            raise RuntimeError("set_molecule requires feature_scorer=True.")
+        self.lm_head.scorer.set_features(bundle.operator_features, update_stats=False)
+
+    def log_prob(self, indices, inv_temperature, return_entropy=False):
         """
         Compute next-token log-probabilities (and optionally entropies) under the same
-        distribution as `act()` (i.e., includes repetition penalty + temperature).
+        distribution as `act()` (i.e., includes repetition penalty + inv_temperature).
 
         Args:
           indices: (B, L) token ids
@@ -62,7 +139,7 @@ class GPT2Model(GPT2LMHeadModel, Policy):
                 repetition_penalty=float(self.repetition_penalty),
             )
 
-        log_probs = F.log_softmax(-temperature * logits, dim=-1)                  # (B, L-1, V)
+        log_probs = F.log_softmax(-inv_temperature * logits, dim=-1)                  # (B, L-1, V)
         token_logp = torch.gather(log_probs, 2, labels.unsqueeze(-1)).squeeze(-1) # (B, L-1)
         if return_entropy:
             entropy = -(log_probs.exp() * log_probs).sum(dim=-1)                  # (B, L-1)
@@ -70,7 +147,7 @@ class GPT2Model(GPT2LMHeadModel, Policy):
         else:
             return token_logp
 
-    def act(self, state, temperature):
+    def act(self, state, inv_temperature):
         """
         Incremental decoding:
         - If state["past_key_values"] exists, use KV cache and run a forward pass on the last token only.
@@ -92,7 +169,7 @@ class GPT2Model(GPT2LMHeadModel, Policy):
                 input_ids=idx,
                 repetition_penalty=float(self.repetition_penalty),
             )
-        probs = Categorical(logits=-temperature * logits)
+        probs = Categorical(logits=-inv_temperature * logits)
         next_token = probs.sample()
         return next_token
 

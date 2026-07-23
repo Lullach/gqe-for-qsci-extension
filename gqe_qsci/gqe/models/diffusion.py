@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
+from gqe_qsci.gqe.models.operator_scorer import OperatorScorer, SpecialTokenEmbedding
 from gqe_qsci.gqe.models.policy import Policy
 
 
@@ -60,6 +61,13 @@ class _CircuitDiffusionBase(Policy):
         Size of the token embedding table. Defaults to vocab_size.
         Pass vocab_size + 1 when a subclass needs an extra special token
         (e.g. a [MASK] token) without changing the output layer size.
+    feature_scorer : bool
+        Replace the integer-ID token embedding and the Linear output head with
+        feature-based equivalents (OperatorScorer), making the model portable
+        across molecules. Requires operator_features. See NOTES.md,
+        "Cross-molecule generalization".
+    operator_features : (V, feat_dim) array, optional
+        The operator menu; required when feature_scorer=True.
     """
 
     def __init__(
@@ -72,15 +80,29 @@ class _CircuitDiffusionBase(Policy):
         diffusion_steps: int,
         dropout: float,
         token_vocab_size: int | None = None,
+        feature_scorer: bool = False,
+        operator_features=None,
     ):
         super().__init__()
         self.vocab_size      = int(vocab_size)
         self.ngates          = int(ngates)
         self.diffusion_steps = int(diffusion_steps)
+        self.feature_scorer  = bool(feature_scorer)
 
         tok_vocab = token_vocab_size if token_vocab_size is not None else self.vocab_size
+        # Special tokens live just past the real vocabulary (e.g. [MASK] at
+        # index vocab_size); everything below vocab_size is a real operator.
+        n_special = tok_vocab - self.vocab_size
 
-        self.token_embedding    = nn.Embedding(tok_vocab, hidden_size)
+        if self.feature_scorer:
+            if operator_features is None:
+                raise ValueError(
+                    "feature_scorer=True requires operator_features "
+                    "(factory passes pool.get_operator_features())."
+                )
+            self.token_embedding = SpecialTokenEmbedding(n_special, hidden_size)
+        else:
+            self.token_embedding = nn.Embedding(tok_vocab, hidden_size)
         self.position_embedding = nn.Embedding(self.ngates, hidden_size)
         # Covers t = 0 … diffusion_steps  (T+1 entries)
         self.time_embedding     = nn.Embedding(self.diffusion_steps + 1, hidden_size)
@@ -95,7 +117,10 @@ class _CircuitDiffusionBase(Policy):
         )
         self.denoiser = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         # Output always spans the *real* gate vocab — never special tokens.
-        self.output = nn.Linear(hidden_size, self.vocab_size)
+        if self.feature_scorer:
+            self.output = OperatorScorer(operator_features, hidden_size)
+        else:
+            self.output = nn.Linear(hidden_size, self.vocab_size)
 
     def _logits(self, tokens, timestep):
         """
@@ -112,18 +137,50 @@ class _CircuitDiffusionBase(Policy):
                 dtype=torch.long, device=tokens.device,
             )
         timestep = timestep.clamp(0, self.diffusion_steps)
+
+        if self.feature_scorer:
+            # Encode the menu once and use it for BOTH the input embedding and
+            # the output head — feature-space weight tying, GPT-2 style.
+            keys = self.output.keys()                          # (V, H)
+            tok_emb = self.token_embedding(tokens, keys)
+        else:
+            keys = None
+            tok_emb = self.token_embedding(tokens)
+
         hidden = (
-            self.token_embedding(tokens)
+            tok_emb
             + self.position_embedding(positions)
             + self.time_embedding(timestep).unsqueeze(1)
         )
-        return self.output(self.denoiser(hidden))
+        h = self.denoiser(hidden)
+        if self.feature_scorer:
+            return self.output(h, keys=keys)                   # (B, L, V)
+        return self.output(h)
 
-    def act(self, state, temperature):
+    def act(self, state, inv_temperature):
         raise RuntimeError(
             f"{self.__class__.__name__} generates whole sequences via "
             "sample_sequence(); act() is not supported."
         )
+
+    def set_molecule(self, bundle):
+        """
+        Re-point at bundle's molecule. Swaps the operator menu (which is also the
+        tied input embedding table). Subclasses with a [MASK] token also update
+        it here via _refresh_mask_token(), since its index is vocab_size.
+        Never call mid-rollout.
+        """
+        if not self.feature_scorer:
+            raise RuntimeError(
+                "set_molecule requires feature_scorer=True."
+            )
+        self.vocab_size = int(bundle.vocab_size)
+        self.output.set_features(bundle.operator_features, update_stats=False)
+        self._refresh_mask_token()
+
+    def _refresh_mask_token(self):
+        """Hook: subclasses with a [MASK] token (index == vocab_size) reset it."""
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -151,13 +208,17 @@ class CircuitDiffusionModelSimple(_CircuitDiffusionBase):
         num_heads=4,
         diffusion_steps=8,
         dropout=0.1,
+        feature_scorer=False,
+        operator_features=None,
     ):
         super().__init__(
             vocab_size, ngates, hidden_size, num_layers,
             num_heads, diffusion_steps, dropout,
+            feature_scorer=feature_scorer,
+            operator_features=operator_features,
         )
 
-    def sample_sequence(self, state, temperature):
+    def sample_sequence(self, state, inv_temperature):
         batch_size = state["idx"].shape[0]
         device     = state["idx"].device
 
@@ -168,19 +229,19 @@ class CircuitDiffusionModelSimple(_CircuitDiffusionBase):
         )
         for step in range(self.diffusion_steps, 0, -1):
             logits = self._logits(tokens, step)
-            tokens = Categorical(logits=-temperature * logits).sample()
+            tokens = Categorical(logits=-inv_temperature * logits).sample()
 
         state["idx"] = torch.cat((state["idx"], tokens), dim=1)
         return state
 
-    def log_prob(self, indices, temperature, return_entropy=False):
+    def log_prob(self, indices, inv_temperature, return_entropy=False):
         gate_tokens  = indices[:, 1:]
         batch_size   = gate_tokens.shape[0]
         device       = gate_tokens.device
         noisy_tokens = torch.zeros_like(gate_tokens)
         timestep     = torch.zeros(batch_size, dtype=torch.long, device=device)
         logits       = self._logits(noisy_tokens, timestep)
-        log_probs    = F.log_softmax(-temperature * logits, dim=-1)
+        log_probs    = F.log_softmax(-inv_temperature * logits, dim=-1)
         token_logp   = torch.gather(
             log_probs, 2, gate_tokens.unsqueeze(-1)
         ).squeeze(-1)
@@ -231,12 +292,16 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
         diffusion_steps=8,
         noise_schedule="cosine",
         dropout=0.1,
+        feature_scorer=False,
+        operator_features=None,
     ):
         # [MASK] lives at index vocab_size — just past the real vocabulary.
         super().__init__(
             vocab_size, ngates, hidden_size, num_layers,
             num_heads, diffusion_steps, dropout,
             token_vocab_size=vocab_size + 1,
+            feature_scorer=feature_scorer,
+            operator_features=operator_features,
         )
         self.mask_token    = self.vocab_size
         self.noise_schedule = noise_schedule
@@ -244,6 +309,10 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
         alpha = _make_alpha_schedule(diffusion_steps, noise_schedule)
         # register_buffer: persistent (saved in checkpoints), moves with .to(device)
         self.register_buffer("alpha", alpha)   # shape [T+1]
+
+    def _refresh_mask_token(self):
+        # [MASK] lives just past the (possibly changed) real vocabulary.
+        self.mask_token = self.vocab_size
 
     # --- forward process ---------------------------------------------------
 
@@ -274,7 +343,7 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
 
     # --- reverse process / sampling ----------------------------------------
 
-    def sample_sequence(self, state, temperature):
+    def sample_sequence(self, state, inv_temperature):
         """
         Generate a full gate sequence via the absorbing reverse process.
 
@@ -303,7 +372,7 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
 
             # Model predicts the clean token x̂_0 at every position
             logits  = self._logits(tokens, step)                           # (B, L, V)
-            x0_pred = Categorical(logits=-temperature * logits).sample()   # (B, L)
+            x0_pred = Categorical(logits=-inv_temperature * logits).sample()   # (B, L)
 
             # Probability of revealing a masked token at this step:
             #   p_reveal = (α_{t-1} − α_t) / (1 − α_t)
@@ -365,7 +434,7 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
 
     # --- log-probability ---------------------------------------------------
 
-    def log_prob(self, indices, temperature, return_entropy=False, masks=None):
+    def log_prob(self, indices, inv_temperature, return_entropy=False, masks=None):
         """
         Estimate  log p_θ(x_0)  via the denoising ELBO averaged over all T
         timesteps.
@@ -411,7 +480,7 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
                 is_masked     = ~is_clean                                  # (B, L)
 
             logits     = self._logits(x_t, t)                             # (B, L, V)
-            log_probs  = F.log_softmax(-temperature * logits, dim=-1)     # (B, L, V)
+            log_probs  = F.log_softmax(-inv_temperature * logits, dim=-1)     # (B, L, V)
             token_logp = torch.gather(
                 log_probs, 2, gate_tokens.unsqueeze(-1)
             ).squeeze(-1)                                                  # (B, L)
@@ -475,20 +544,33 @@ class CircuitDiffusionModelSingleShot(_CircuitDiffusionBase):
         num_heads=8,
         diffusion_steps=16,
         dropout=0.1,
+        feature_scorer=False,
+        operator_features=None,
     ):
         # [MASK] lives at index vocab_size — just past the real vocabulary.
         # diffusion_steps sets the time-embedding table size; the model always
         # conditions on t = diffusion_steps (the fully-masked timestep).
+        #
+        # NOTE: this model never embeds a real operator token — _logits() only
+        # ever receives an all-[MASK] sequence, at both sample and log_prob time.
+        # So the token embedding is only ever the [MASK] vector, and the output
+        # head is the model's ONLY vocabulary touch point. That makes it the
+        # cheapest model to port across molecules. See NOTES.md.
         super().__init__(
             vocab_size, ngates, hidden_size, num_layers,
             num_heads, diffusion_steps, dropout,
             token_vocab_size=vocab_size + 1,
+            feature_scorer=feature_scorer,
+            operator_features=operator_features,
         )
+        self.mask_token = self.vocab_size
+
+    def _refresh_mask_token(self):
         self.mask_token = self.vocab_size
 
     # --- reverse process / sampling ----------------------------------------
 
-    def sample_sequence(self, state, temperature):
+    def sample_sequence(self, state, inv_temperature):
         """
         Generate a gate sequence in a single forward pass.
 
@@ -507,14 +589,14 @@ class CircuitDiffusionModelSingleShot(_CircuitDiffusionBase):
 
         # Single forward pass conditioned on t = T
         logits = self._logits(tokens, self.diffusion_steps)               # (B, L, V)
-        tokens = Categorical(logits=-temperature * logits).sample()        # (B, L)
+        tokens = Categorical(logits=-inv_temperature * logits).sample()        # (B, L)
 
         state["idx"] = torch.cat((state["idx"], tokens), dim=1)
         return state
 
     # --- log-probability ---------------------------------------------------
 
-    def log_prob(self, indices, temperature, return_entropy=False, masks=None):
+    def log_prob(self, indices, inv_temperature, return_entropy=False, masks=None):
         """
         Exact log p_θ(x_0 | x_T) — no ELBO approximation.
 
@@ -536,7 +618,7 @@ class CircuitDiffusionModelSingleShot(_CircuitDiffusionBase):
         t         = torch.full((B,), self.diffusion_steps, dtype=torch.long, device=device)
 
         logits    = self._logits(masked, t)                               # (B, L, V)
-        log_probs = F.log_softmax(-temperature * logits, dim=-1)          # (B, L, V)
+        log_probs = F.log_softmax(-inv_temperature * logits, dim=-1)          # (B, L, V)
         token_logp = torch.gather(
             log_probs, 2, gate_tokens.unsqueeze(-1)
         ).squeeze(-1)                                                      # (B, L)
