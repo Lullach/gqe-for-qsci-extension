@@ -1,0 +1,20 @@
+# H2O, STO-3G, 8e/6o active space (O 1s frozen) -> 12 qubits.
+#
+# Bent (C2v), so unlike N2 and LiH there are NO degenerate valence orbitals.
+# This makes it the control case for two questions:
+#   1. do the duplicate feature rows collapse when the degeneracy is removed?
+#   2. does the ~38% "share a qubit but commute" statistic survive?
+# If (2) holds here, the spurious-DAG-edge problem is not an N2 artifact.
+_target_: gqe_qsci.molecule.PySCFMolecule
+geometry:
+  type: custom
+  geometry: [
+    ['O', [0.000000,  0.000000,  0.117300]],
+    ['H', [0.000000,  0.757200, -0.469200]],
+    ['H', [0.000000, -0.757200, -0.469200]],
+  ]
+basis: 'sto-3g'
+nelecas: 8
+norbcas: 6
+spin: 0
+charge: 0

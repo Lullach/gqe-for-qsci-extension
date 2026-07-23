@@ -26,8 +26,23 @@ loss:
 # Entropy regularisation bonus subtracted from the GRPO loss.
 # Encourages sequence diversity; set to 0.0 to disable.
 entropy_coeff: 0.01
+# DefaultScheduler: deterministic linear ramp on the INVERSE temperature beta
+# (current_beta += delta every iteration; get_inverse_temperature() returns
+# it directly). Sampling always does Categorical(logits = -beta * raw_logits),
+# so increasing beta sharpens the policy (more exploitation) over training --
+# standard annealing, with no dependence on a noisy 10-sample batch-variance
+# estimate. See gqe_qsci/gqe/scheduler.py for the full naming-convention note
+# and NOTES.md ("BUG (fixed): temperature / inverse-temperature naming") for
+# why this replaced VarBasedScheduler as the default: that scheduler's
+# docstring and implementation disagreed on which direction to adjust beta
+# under high vs low batch-energy variance, and the direction question is not
+# settled. VarBasedScheduler is still available (gqe_qsci.gqe.scheduler) for
+# anyone who wants to revisit that design with target_var recalibrated per
+# molecule (target_var ~ std^2 of GQE-optimized/energy/std).
+#
+# start/delta below reproduce the ramp already observed empirically in prior
+# runs (0.55 -> ~1.1 over ~30 epochs).
 temperature_scheduler:
-  _target_: gqe_qsci.gqe.scheduler.VarBasedScheduler
-  initial: 0.5
+  _target_: gqe_qsci.gqe.scheduler.DefaultScheduler
+  start: 0.5
   delta: 0.02
-  target_var: 1e-5

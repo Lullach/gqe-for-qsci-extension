@@ -28,6 +28,12 @@ operator_pool:
   ccsd_threshold: 1e-6
   remove_z_ladder: true
   only_use_first_pauli: true
+  # Drop excitations that are pair-order permutations of one already emitted.
+  # The CCSD tensor symmetry t_ijab = t_jiba lists the same physical excitation
+  # twice; combined with build_operator_pool's `seen` dedup, each copy silently
+  # contributes a DIFFERENT Pauli fragment to the pool. Shrinks V.
+  # Default false = current behaviour. See NOTES.md, "Pool redundancy".
+  dedup_excitations: false
 
 qsci:
   max_dim: 2000
@@ -39,6 +45,10 @@ defaults:
   - model: gpt2
   - molecule: n2
   - trainer: default
+  # Multi-molecule training (Phase 2+). Null = single-molecule (uses `molecule`
+  # above). Set e.g. molecule_set=n2_bond_scan to train across a molecule set.
+  # Must precede `experiment` so an experiment can `override /molecule_set`.
+  - optional molecule_set: null
   - _self_
   - optional experiment: null
 

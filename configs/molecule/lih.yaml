@@ -1,0 +1,13 @@
+# LiH, STO-3G, 2e/5o active space (Li 1s frozen) -> 10 qubits.
+# Linear (C_inf_v), so the Li 2p_x / 2p_y pi orbitals are degenerate,
+# like N2's pi system. Cheap comparison point that keeps the degeneracy.
+_target_: gqe_qsci.molecule.PySCFMolecule
+geometry:
+  type: linear_chain
+  atoms: ['Li', 'H']
+  bond_length: 1.6
+basis: 'sto-3g'
+nelecas: 2
+norbcas: 5
+spin: 0
+charge: 0
