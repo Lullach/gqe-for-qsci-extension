@@ -1,0 +1,15 @@
+# GPT-2 with the feature-based operator scorer.
+#
+# GPT-2 has TWO vocabulary touch points because it replays chosen operators as
+# input; both are replaced by the SAME OperatorScorer instance:
+#   - transformer.wte -> _FeatureWTE  (input: keys[token])
+#   - lm_head         -> _ScorerHead  (output: query @ keys.T)
+# This preserves GPT-2's weight tying — the tied matrix is now computed from
+# operator features instead of being free parameters. config.tie_word_embeddings
+# is forced False so HF does not try to tie .weight attributes our modules lack.
+#
+# repetition_penalty still operates on token indices and is unaffected.
+_target_: gqe_qsci.gqe.models.gpt2.GPT2Model
+small: true
+repetition_penalty: 1.2
+feature_scorer: true

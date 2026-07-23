@@ -1,0 +1,22 @@
+# Diffusion GNN absorbing with the feature-based scorer.
+#
+# Absorbing DIFFUSION model with a GAT denoiser (not the DAG GNN). Same two
+# vocabulary touch points as diffusion_absorbing_matched_features (output head +
+# token_embedding of revealed tokens), just with a GAT denoiser instead of a
+# TransformerEncoder.
+#
+# NOTE: the graph here is over gate POSITIONS (a chain), not qubit wires, so
+# there is no per-qubit-index embedding to make portable — unlike the DAG GNN.
+#
+# Requires torch_geometric:  pip install torch_geometric
+#
+# Use config  model=diffusion_gnn_absorbing_features  to select this variant.
+_target_: gqe_qsci.gqe.models.gnn.CircuitGNNModelAbsorbing
+hidden_size: 128
+num_layers: 6
+num_heads: 4
+diffusion_steps: 16
+noise_schedule: cosine
+dropout: 0.1
+graph_type: chain
+feature_scorer: true

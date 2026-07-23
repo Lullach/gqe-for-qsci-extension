@@ -1,0 +1,18 @@
+# Absorbing diffusion (capacity-matched, T=16) with the feature-based scorer.
+#
+# Two vocabulary touch points, both replaced:
+#   - output head          -> OperatorScorer
+#   - token_embedding      -> SpecialTokenEmbedding (revealed operators are
+#                             embedded as the scorer's keys; [MASK] gets its own
+#                             learned vector). The absorbing reverse process
+#                             feeds revealed tokens back in, so this side is NOT
+#                             optional here (unlike diffusion_singleshot).
+# Input and output share one key matrix — feature-space weight tying.
+_target_: gqe_qsci.gqe.models.diffusion.CircuitDiffusionModelAbsorbing
+hidden_size: 256
+num_layers: 8
+num_heads: 8
+diffusion_steps: 16
+noise_schedule: cosine
+dropout: 0.1
+feature_scorer: true

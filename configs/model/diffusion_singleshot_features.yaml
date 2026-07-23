@@ -1,0 +1,17 @@
+# Single-shot diffusion with the feature-based operator scorer.
+#
+# The CHEAPEST model to make cross-molecule portable: _logits() only ever sees
+# an all-[MASK] sequence (at both sample and log_prob time), so the output head
+# is its only vocabulary touch point — no operator ID is ever embedded. Every
+# other model additionally feeds operator IDs back in on the input side.
+#
+# Combined with 1-forward-pass inference and exact (non-ELBO) log_prob, this
+# makes it a strong candidate for the Phase 2 multi-molecule vehicle.
+# See NOTES.md, "Porting the scorer to the other models".
+_target_: gqe_qsci.gqe.models.diffusion.CircuitDiffusionModelSingleShot
+hidden_size: 256
+num_layers: 8
+num_heads: 8
+diffusion_steps: 16
+dropout: 0.1
+feature_scorer: true

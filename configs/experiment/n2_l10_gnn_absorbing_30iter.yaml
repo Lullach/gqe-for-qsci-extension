@@ -1,13 +1,13 @@
 # @package _global_
-# GNN absorbing diffusion — comparable to n2_l10_gpt2_30iter and
+# Diffusion GNN absorbing — comparable to n2_l10_gpt2_30iter and
 # n2_l10_diffusion_absorbing_matched_30iter:
 #   - 30 iterations, shots=100k, no max_dim cap (default 2000)
 #   - same W&B group so charts overlay with those runs
 defaults:
   - override /molecule: n2
-  - override /model: gnn_absorbing
+  - override /model: diffusion_gnn_absorbing
 
-exp_tag: n2-L10-gnn-absorbing-30iter
+exp_tag: n2-L10-diffusion-gnn-absorbing-30iter
 ngates: 10
 wandb:
   project: ${project.name}
