@@ -1,0 +1,32 @@
+# @package _global_
+# ABLATION BASELINE: DAG GNN with canonical masking OFF.
+# Pair with n2_l10_dag_gnn_30iter_mask.yaml — identical except for
+# model.canonical_masking. Same W&B group so the two overlay directly.
+defaults:
+  - override /molecule: n2
+  - override /model: dag_gnn
+
+exp_tag: n2-L10-dag-gnn-30iter-nomask
+ngates: 10
+model:
+  canonical_masking: false
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-canonical-masking-ablation
+  tags: ["n2", "L10", "30iter", "dag", "GNN", "nomask", "ablation"]
+trainer:
+  max_iters: 30
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 10
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

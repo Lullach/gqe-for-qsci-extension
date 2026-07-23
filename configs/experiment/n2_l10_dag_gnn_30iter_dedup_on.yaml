@@ -1,0 +1,39 @@
+# @package _global_
+# TREATMENT arm of the dedup_excitations A/B: pair-order duplicate excitations
+# removed, so the pool has no artifact commuting fragments. Pair with
+# n2_l10_dag_gnn_30iter_dedup_off.yaml; identical except operator_pool.
+# dedup_excitations. Same W&B group so the two overlay directly.
+#
+# Expectation: V drops 154 -> 118 (a 23% smaller action space). Modest prior on
+# the energy moving -- the masking ablation taught us pool-level redundancy is
+# largely invisible to policy gradient at ~300 sampled circuits. The smaller
+# output softmax is the one mechanistic reason it might help. Primary value is a
+# cleaner, artifact-free pool regardless of the curve.
+defaults:
+  - override /molecule: n2
+  - override /model: dag_gnn
+
+exp_tag: n2-L10-dag-gnn-30iter-dedup-on
+ngates: 10
+operator_pool:
+  dedup_excitations: true       # V = 118 for N2
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-dedup-ablation
+  tags: ["n2", "L10", "30iter", "dag", "GNN", "dedup-on", "ablation"]
+trainer:
+  max_iters: 30
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 10
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

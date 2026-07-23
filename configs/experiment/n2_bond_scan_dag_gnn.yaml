@@ -1,0 +1,41 @@
+# @package _global_
+# Phase 3: N2 bond-length scan with the feature-based DAG GNN, trained across 5
+# geometries and evaluated (later, step 6) on 2 held-out ones.
+#
+# One policy, shared weights, is round-robined over the training geometries: each
+# epoch activates one molecule (set_molecule), generates a rollout group for it,
+# and does the gradient steps while that molecule is installed. Feature
+# normalization is frozen over the whole training set so the same physical
+# operator maps to the same coordinates at every bond length.
+#
+# 100 epochs / 5 train geometries = ~20 rollout groups per geometry.
+# Requires a feature-based model (feature_scorer: true) — the integer-ID head
+# cannot transfer. Requires torch_geometric.
+defaults:
+  - override /molecule_set: n2_bond_scan
+  - override /model: dag_gnn_features
+
+exp_tag: n2-bond-scan-dag-gnn-100iter-shots1k-dmax170
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-bond-scan
+  tags: ["n2", "bond-scan", "multi-molecule", "dag", "GNN", "featscorer", "phase3"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10       # MUST equal num_samples: no cross-molecule buffer mixing
+  step_per_epoch: 30
+  load_checkpoint: false   # multi-molecule resume is not supported
+  checkpoint_every_n_iters: 25
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

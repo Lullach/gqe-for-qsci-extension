@@ -1,0 +1,32 @@
+# @package _global_
+# N2 bond-length scan (Phase 3) — diffusion GNN absorbing (GAT denoiser over gate
+# positions), feature scorer. Same molecule set + trainer settings; W&B group
+# n2-bond-scan. Requires torch_geometric.
+defaults:
+  - override /molecule_set: n2_bond_scan
+  - override /model: diffusion_gnn_absorbing_features
+
+exp_tag: n2-bond-scan-diffusion-gnn-absorbing-100iter-shots1k-dmax170
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-bond-scan
+  tags: ["n2", "bond-scan", "multi-molecule", "diffusion", "GNN", "GAT", "absorbing", "featscorer", "phase3"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 25
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

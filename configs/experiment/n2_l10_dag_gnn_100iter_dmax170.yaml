@@ -1,0 +1,30 @@
+# @package _global_
+# DAG GNN — paper-comparable run with dmax=170:
+#   - 100 iterations, shots=100k, max_dim=170
+#   - joins n2-L10-dmax170-comparison so charts overlay with other policy runs
+defaults:
+  - override /molecule: n2
+  - override /model: dag_gnn
+
+exp_tag: n2-L10-dag-gnn-100iter-dmax170
+ngates: 10
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-paper-settings
+  tags: ["n2", "L10", "100iter", "dag", "GNN", "GAT", "chain", "dmax170", "paper-settings"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 10
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

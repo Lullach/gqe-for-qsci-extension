@@ -1,0 +1,42 @@
+# @package _global_
+# PHASE 1 GATE: DAG GNN with the feature-based OperatorScorer head.
+#
+# Compare against n2_l10_dag_gnn_30iter_dedup_on — the integer-ID head on the
+# SAME deduped pool (V=118), otherwise identical settings. Both share the W&B
+# group n2-L10-dedup-ablation so the three arms (dedup-off ID, dedup-on ID,
+# featscorer) overlay in one chart.
+#
+# Gate: the feature scorer must MATCH the integer-ID baseline's
+# Global-refined(best_so_far)/energy. A feature head has strictly less capacity
+# (no free column per operator; equal-feature operators get equal logits), so
+# matching means the physical features carry enough information to select
+# operators — the prerequisite for all cross-molecule work. If it lags, suspect
+# normalization or op_encoder capacity before concluding the approach fails.
+defaults:
+  - override /molecule: n2
+  - override /model: dag_gnn_features
+
+exp_tag: n2-L10-dag-gnn-30iter-featscorer
+ngates: 10
+operator_pool:
+  dedup_excitations: true       # V = 118, matching the dedup_on baseline arm
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-dedup-ablation
+  tags: ["n2", "L10", "30iter", "dag", "GNN", "featscorer", "phase1-gate"]
+trainer:
+  max_iters: 30
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 10
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

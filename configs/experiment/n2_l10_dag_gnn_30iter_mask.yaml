@@ -1,0 +1,36 @@
+# @package _global_
+# DAG GNN with canonical (trace lexicographic normal form) masking ON.
+# Pair with n2_l10_dag_gnn_30iter_nomask.yaml — identical except for
+# model.canonical_masking. Same W&B group so the two overlay directly.
+#
+# Hypothesis: masking removes the ~57% of qubit-sharing operator pairs whose
+# ordering is physically meaningless, shrinking the search space with no loss
+# of expressiveness -> faster convergence at equal sample budget.
+defaults:
+  - override /molecule: n2
+  - override /model: dag_gnn
+
+exp_tag: n2-L10-dag-gnn-30iter-mask
+ngates: 10
+model:
+  canonical_masking: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-L10-canonical-masking-ablation
+  tags: ["n2", "L10", "30iter", "dag", "GNN", "mask", "canonical", "trace"]
+trainer:
+  max_iters: 30
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 10
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

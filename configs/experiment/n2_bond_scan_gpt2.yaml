@@ -1,0 +1,33 @@
+# @package _global_
+# N2 bond-length scan (Phase 3) — GPT-2 (autoregressive), feature scorer.
+# GPT-2 is the only model with TWO vocabulary touch points (wte + lm_head); both
+# use the one shared scorer, so cross-molecule transfer works the same way.
+# Same molecule set + trainer settings; W&B group n2-bond-scan.
+defaults:
+  - override /molecule_set: n2_bond_scan
+  - override /model: gpt2_features
+
+exp_tag: n2-bond-scan-gpt2-100iter-shots1k-dmax170
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: n2-bond-scan
+  tags: ["n2", "bond-scan", "multi-molecule", "gpt2", "transformer", "featscorer", "phase3"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 25
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170
