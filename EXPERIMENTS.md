@@ -52,6 +52,59 @@ python train.py experiment=n2_gpt2 trainer.max_iters=1 trainer.num_samples=2 tra
 python train.py experiment=n2_diffusion trainer.max_iters=1 trainer.num_samples=2 trainer.batch_size=2 trainer.warmup_size=2 trainer.buffer_size=2 trainer.step_per_epoch=1 sampler.shots=100 qsci.max_dim=100 trainer.load_checkpoint=false exp_tag=n2-diffusion-smoke
 ```
 
+## N2 L10 — DAG GNN dedup_excitations A/B (shots=1000, dmax=170, 30 iters)
+
+Tests whether removing pair-order-duplicate excitations from the operator pool
+(and the artifact commuting Pauli fragments they create) changes training.
+
+- **off**: pool as-is, V=154.  **on**: duplicates removed, V=118 (−23%).
+- Both `canonical_masking: false` (the masking ablation was a null result).
+- Group `n2-L10-dedup-ablation` so the two overlay.
+
+What to look for in W&B: `Global-refined(best_so_far)/energy` and its slope.
+Prior is modest — the earlier canonical-masking A/B showed pool-level redundancy
+is largely invisible to policy gradient at ~300 sampled circuits. The one
+mechanistic reason dedup might help is the smaller output softmax (118 vs 154),
+not the removed orderings. If the curves overlap that is the expected outcome,
+not a failure; the cleanup is a correctness win either way (see NOTES.md,
+"Pool redundancy"). Interpret with care: V differs between arms, so a smaller
+vocabulary is inherently easier to learn over — not a perfectly controlled test.
+
+```powershell
+docker run --rm --entrypoint /bin/bash -e WANDB_API_KEY=<KEY> -e OMPI_MCA_pml=ob1 -e OMPI_MCA_btl=self,tcp -e OMPI_MCA_opal_warn_on_missing_libcuda=0 -v "${workdir}:/workspace" -w /workspace gqe_qsci_cpu -lc "pip install torch_geometric && python3 train.py experiment=n2_l10_dag_gnn_30iter_dedup_off && python3 train.py experiment=n2_l10_dag_gnn_30iter_dedup_on"
+```
+
+## N2 L10 — Phase 1 gate: feature-based OperatorScorer (shots=1000, dmax=170)
+
+DAG GNN whose operator head scores operators from physical feature vectors
+(`model=dag_gnn_features`) instead of a free Linear column per operator.
+Baseline for comparison is `n2_l10_dag_gnn_30iter_dedup_on` — the SAME deduped
+pool (V=118) with the integer-ID head. Joins group `n2-L10-dedup-ablation`.
+
+Gate: featscorer must match the integer-ID arm on
+`Global-refined(best_so_far)/energy`. Match -> proceed to Phase 2
+(multi-molecule loop); lag -> tune normalization / op_encoder capacity first.
+See NOTES.md, "Cross-molecule generalization" -> "Phased implementation plan".
+
+```powershell
+docker run --rm --entrypoint /bin/bash -e WANDB_API_KEY=<KEY> -e OMPI_MCA_pml=ob1 -e OMPI_MCA_btl=self,tcp -e OMPI_MCA_opal_warn_on_missing_libcuda=0 -v "${workdir}:/workspace" -w /workspace gqe_qsci_cpu -lc "pip install torch_geometric && python3 train.py experiment=n2_l10_dag_gnn_30iter_featscorer"
+```
+
+## N2 bond-length scan — multi-molecule DAG GNN (Phase 3, shots=1000, dmax=170)
+
+One feature-based policy trained across 5 N2 geometries (bond lengths 1.0-2.8 A),
+round-robined one geometry per epoch. Feature normalization frozen over the
+training set. 100 epochs -> ~20 rollout groups per geometry. Metrics namespaced
+per geometry in W&B group `n2-bond-scan` (e.g. `nn_r1.30/GQE-optimized/energy`).
+
+This is the first real cross-molecule run — it exercises set_molecule, the
+per-molecule bundles, and global normalization together. Zero-shot eval on the
+held-out geometries (1.45, 3.2) is step 6, not yet wired.
+
+```powershell
+docker run --rm --entrypoint /bin/bash -e WANDB_API_KEY=<KEY> -e OMPI_MCA_pml=ob1 -e OMPI_MCA_btl=self,tcp -e OMPI_MCA_opal_warn_on_missing_libcuda=0 -v "${workdir}:/workspace" -w /workspace gqe_qsci_cpu -lc "pip install torch_geometric && python3 train.py experiment=n2_bond_scan_dag_gnn"
+```
+
 ## Docker on Windows
 
 CUDA-Q 0.12.0 is not available as a native Windows Python package, so the

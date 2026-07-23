@@ -106,7 +106,7 @@ Weights are architecturally compatible with the absorbing model; warm-starting f
 
 ---
 
-#### GNN Policy Network (`model=gnn_absorbing`)
+#### Diffusion GNN Policy Network (`model=diffusion_gnn_absorbing`)
 
 **Theory.** Replaces the Transformer Encoder denoiser with **Graph Attention Network** ([GAT, Veličković et al., 2018](https://arxiv.org/abs/1710.10903)) layers. Gate positions are nodes; edges encode positional structure via a configurable graph topology.
 
@@ -165,15 +165,15 @@ Default clipping range: `clip_grpo_low=0.2`, `clip_grpo_high=0.28` (asymmetric t
 
 ### Temperature Scheduling
 
-**Theory.** Sampling temperature $T$ controls exploration vs. exploitation in the policy: high $T$ flattens the distribution (explore), low $T$ sharpens it (exploit). Adaptive temperature scheduling adjusts $T$ based on the diversity of sampled energies.
+**Theory.** Sampling temperature $T$ controls exploration vs. exploitation in the policy: high $T$ flattens the distribution (explore), low $T$ sharpens it (exploit). Every scheduler and every model in this codebase actually tracks and consumes the **inverse temperature** $\beta = 1/T$: sampling is always $\pi(a) \propto \exp(-\beta \cdot \text{logits}(a))$ (the standard Boltzmann form), so **increasing $\beta$ sharpens** the policy (more exploitation) and **decreasing $\beta$ flattens** it (more exploration) — the opposite of what "increasing temperature" would mean if $T$ itself were the tracked quantity. This is worth stating explicitly because the codebase previously mixed the two up (see `gqe_qsci/gqe/scheduler.py` for the full naming-convention note).
 
-**Implementation.** Three schedulers are available (`gqe_qsci/gqe/scheduler.py`):
+**Implementation.** Three schedulers are available (`gqe_qsci/gqe/scheduler.py`), all returning $\beta$ via `get_inverse_temperature()`:
 
 | Scheduler | Behavior |
 |-----------|----------|
-| `DefaultScheduler` | Linear increment: $T \mathrel{+}= \delta$ per epoch |
-| `CosineScheduler` | Oscillates between $T_\text{min}$ and $T_\text{max}$ (cosine annealing with warm restarts) |
-| `VarBasedScheduler` *(default)* | Increases $T$ if energy variance exceeds target, decreases otherwise. Keeps the policy in a productive exploration regime |
+| `DefaultScheduler` *(default)* | Linear increment: $\beta \mathrel{+}= \delta$ per epoch — deterministic annealing, no dependence on batch statistics |
+| `CosineScheduler` | Oscillates $\beta$ between $\beta_\text{min}$ and $\beta_\text{max}$ (cosine annealing with warm restarts) |
+| `VarBasedScheduler` | Adjusts $\beta$ based on batch energy variance vs. `target_var`. **Not currently used as default** — its exploration/exploitation direction under high vs. low variance is an open design question (only 10 samples/batch back the variance estimate); see the class docstring before using it |
 
 The current inverse temperature is logged each epoch as `trainer/inv_temperature`.
 
@@ -218,7 +218,7 @@ where $H$ is the Hamiltonian matrix projected onto the union basis and $S$ is th
 │   │   ├── diffusion_absorbing.yaml         # Absorbing diffusion (small)
 │   │   ├── diffusion_absorbing_matched.yaml # Absorbing diffusion (matched to GPT-2 capacity)
 │   │   ├── diffusion_singleshot.yaml        # Single-shot diffusion
-│   │   └── gnn_absorbing.yaml       # GNN absorbing diffusion (requires torch_geometric)
+│   │   └── diffusion_gnn_absorbing.yaml  # Diffusion w/ GAT denoiser (requires torch_geometric)
 │   ├── molecule/
 │   │   ├── h2.yaml
 │   │   ├── n2.yaml                  # N2, STO-3G, 10e/8o active space
@@ -335,7 +335,7 @@ python train.py molecule=n2 model=diffusion_singleshot
 
 ```bash
 pip install torch_geometric
-python train.py molecule=n2 model=gnn_absorbing
+python train.py molecule=n2 model=diffusion_gnn_absorbing
 ```
 
 ### Reproduce paper experiments
@@ -420,7 +420,7 @@ Hydra configs live under `configs/`. Key parameters:
 | Config key | Default | Description |
 |------------|---------|-------------|
 | `molecule` | `n2` | Molecule config group (`n2`, `h2`, `phenylene-1_4-dinitrene`) |
-| `model` | `gpt2` | Policy model (`gpt2`, `diffusion_absorbing_matched`, `diffusion_singleshot`, `gnn_absorbing`, …) |
+| `model` | `gpt2` | Policy model (`gpt2`, `diffusion_absorbing_matched`, `diffusion_singleshot`, `diffusion_gnn_absorbing`, `dag_gnn`, …) |
 | `ngates` | `10` | Number of gates in each generated circuit |
 | `operator_pool.spec` | `pauli_evolution` | Pool type: `pauli_evolution` or `excitation` |
 | `operator_pool.ccsd_threshold` | `1e-6` | Minimum CCSD amplitude to include an operator |
@@ -436,7 +436,7 @@ Hydra configs live under `configs/`. Key parameters:
 | `model.repetition_penalty` | `1.2` | GPT-2 only: repetition penalty on already-selected gates |
 | `model.noise_schedule` | `cosine` | Diffusion models: `cosine` or `linear` |
 | `model.diffusion_steps` | varies | Diffusion models: number of denoising steps T |
-| `scheduler.target_var` | `1e-5` | Energy variance target for `VarBasedScheduler` |
+| `trainer.temperature_scheduler.delta` | `0.02` | Per-epoch increment to the inverse temperature $\beta$ (`DefaultScheduler`) |
 | `exp_tag` | auto | Experiment tag (determines output directory) |
 
 Pre-configured experiment files in `configs/experiment/` bundle molecule, model, and trainer settings for reproducible runs.
