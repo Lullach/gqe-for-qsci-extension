@@ -47,6 +47,16 @@ class PySCFMolecule:
     if self._ccsd_amplitude is None:
       _ = self.compute_ccsd()
     return self._ccsd_amplitude
+
+  @property
+  def active_mo_energy(self):
+    """Hartree-Fock orbital energies of the active-space orbitals, shape (norb,)."""
+    return np.asarray(self.hf.mo_energy)[self.active_indices]
+
+  @property
+  def active_mo_occ(self):
+    """Hartree-Fock occupations (2.0 / 0.0) of the active-space orbitals, shape (norb,)."""
+    return np.asarray(self.hf.mo_occ)[self.active_indices]
   
   def _build_geometry(self, geometry):
     if geometry.type == 'linear_chain':
