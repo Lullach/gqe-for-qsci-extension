@@ -1,0 +1,39 @@
+# DAG GNN policy: generates circuits by incrementally building a circuit DAG.
+#
+# At each of L steps the GNN reads the partial DAG and samples the next operator
+# conditioned on the current frontier (the most recently placed gate on each qubit).
+# The flat operator sequence stored in the replay buffer is the order in which
+# gates were placed during DAG construction.
+#
+# vocab_size, ngates, n_qubits, and qubit_footprints are injected at runtime
+# by the factory — do not set them here.
+#
+# Requires torch_geometric:
+#   pip install torch_geometric
+#
+# Use config  model=dag_gnn  to select this variant.
+#
+# canonical_masking: enforce the trace lexicographic normal form, so circuits
+#   that differ only by swapping commuting gates cannot both be generated.
+#
+#   DEFAULT OFF, but the evidence for that default is WEAK. The 30-iter N2
+#   ablation showed no difference -- however energy/mean and energy/min are flat
+#   in BOTH arms over all 30 epochs, i.e. neither policy learned anything, so the
+#   comparison was underpowered rather than negative. Re-testing at 100 iters
+#   (paper settings) with the fixed temperature scheduler.
+#   See NOTES.md, "Result: canonical masking -- INCONCLUSIVE, not negative".
+#
+#   The a-priori argument against it still stands: ~154^10 search space vs ~1000
+#   sampled circuits means equivalent orderings are never revisited, so
+#   deduplicating them cannot pay. But that is an argument, not a measurement.
+#
+#   Kept because it is verified correct and free (O(V*L^2)); may matter at much
+#   larger L, where the class sizes grow. Switching it on invalidates replay
+#   buffers / checkpoints from unmasked runs -- use a fresh exp_tag and
+#   trainer.load_checkpoint=false.
+_target_: gqe_qsci.gqe.models.dag_gnn.CircuitDAGGNNPolicy
+hidden_size: 128
+num_layers: 6
+num_heads: 4
+dropout: 0.1
+canonical_masking: true

@@ -1,0 +1,18 @@
+# DAG GNN with the feature-based operator scorer (Phase 1 of the
+# cross-molecule plan, see NOTES.md "Cross-molecule generalization").
+#
+# Identical to dag_gnn.yaml except feature_scorer: the fixed Linear(H, V)
+# operator head is replaced by OperatorScorer, which scores each operator from
+# its physical feature vector (menu from pool.get_operator_features(), injected
+# by the factory). Operators with identical feature rows receive identical
+# logits by construction — correct for symmetry-equivalent excitations.
+#
+# Gate criterion: must match the integer-ID dag_gnn baseline on a single
+# molecule before any multi-molecule work builds on it.
+_target_: gqe_qsci.gqe.models.dag_gnn.CircuitDAGGNNPolicy
+hidden_size: 128
+num_layers: 6
+num_heads: 4
+dropout: 0.1
+canonical_masking: true
+feature_scorer: true
