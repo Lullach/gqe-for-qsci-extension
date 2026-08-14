@@ -1,0 +1,76 @@
+Bootstrap: docker
+From: ghcr.io/nvidia/cudaqx:0.4.0
+
+# Singularity image for GQE-QSCI on ABCI-Q (System H, NVIDIA H100).
+#
+# Mirrors the project `dockerfile` with ONE deliberate difference: the project
+# code is NOT baked into the image. On HPC the repo is bind-mounted at runtime
+# (--bind $REPO:/workspace), so you can edit code and re-run without rebuilding
+# a multi-GB image. PYTHONPATH=/workspace makes `import gqe_qsci` work without
+# `pip install -e .` (which would need a writable image at runtime).
+#
+# Build:  see hpc/build_image.sh
+# Use:    see hpc/jobs/*.sh
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_NO_CACHE_DIR=1
+
+    apt-get update && apt-get install -y \
+        build-essential gcc g++ make git python3-dev python3-pip \
+        && rm -rf /var/lib/apt/lists/*
+
+    python3 -m pip install --upgrade pip "setuptools<82" wheel
+    python3 -m pip install numpy scipy mpi4py
+
+    # PyCI: CI Hamiltonian diagonalisation. Built from source, as in dockerfile.
+    git clone https://github.com/theochem/pyci.git /tmp/pyci
+    cd /tmp/pyci && make && python3 -m pip install . && rm -rf /tmp/pyci
+
+    # Project dependencies, installed WITHOUT the project itself (no `-e .`),
+    # so the image stays code-free. Keep this list in sync with pyproject.toml.
+    # cu128 wheels: H100 (sm_90) support.
+    python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cu128 \
+        "torch==2.9.1" \
+        "pytorch-lightning==2.6.1" \
+        "scipy~=1.15.3" \
+        "hydra-core==1.3.2" \
+        "omegaconf==2.3.0" \
+        "transformers==4.57.3" \
+        "qiskit==2.0.0" \
+        "wandb>=0.23.1" \
+        "tequila-basic==1.9.9" \
+        "pyscf==2.11.0"
+
+    # torch_geometric: required by dag_gnn and diffusion_gnn_absorbing models.
+    # Baked in here so jobs don't need `pip install` at runtime (compute nodes
+    # generally have no internet access).
+    python3 -m pip install torch_geometric
+
+%environment
+    export PYTHONPATH=/workspace:${PYTHONPATH:-}
+    export PYTHONUNBUFFERED=1
+    # Match the local Docker workflow: avoid the ucx PML that isn't available.
+    export OMPI_MCA_pml=ob1
+    export OMPI_MCA_btl=self,tcp
+    export OMPI_MCA_opal_warn_on_missing_libcuda=0
+    # Keep BLAS/OMP from oversubscribing a shared node; train.py also sets this.
+    export OMP_NUM_THREADS=1
+
+%runscript
+    exec "$@"
+
+%labels
+    Project gqe-for-qsci
+    BaseImage ghcr.io/nvidia/cudaqx:0.4.0
+    CudaQ 0.12.0
+
+%help
+    GQE-QSCI runtime for ABCI-Q System H.
+
+    The project code is NOT in this image - bind-mount it:
+        singularity exec --nv --bind /path/to/repo:/workspace \
+            cudaq_qsci.sif python3 /workspace/train.py experiment=...
+
+    See hpc/README.md in the repository.

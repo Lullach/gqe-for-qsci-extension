@@ -1,0 +1,25 @@
+# ABCI-Q System H access — copy into ~/.ssh/config and replace <ABCIQ_USERNAME>
+# with your own username (and adjust the IdentityFile path if needed).
+#
+# Two hops: your machine -> access server (qas.q.abci.ai) -> interactive node
+# (qes). ProxyJump does both in one step, so `ssh abciq` is all you need.
+#
+# Register the PUBLIC key (id_ed25519_abciq.pub) at the ABCI-Q User Portal
+# first — paste it as a single line with no trailing newline.
+#
+# StrictHostKeyChecking accept-new: trusts each host's key on first contact and
+# pins it thereafter. Needed here because passing it on the command line does
+# not reliably propagate through the ProxyJump hop.
+
+Host abciq
+    HostName qes
+    User <ABCIQ_USERNAME>
+    ProxyJump <ABCIQ_USERNAME>@qas.q.abci.ai
+    IdentityFile ~/.ssh/id_ed25519_abciq
+    HostKeyAlgorithms ssh-ed25519
+    StrictHostKeyChecking accept-new
+
+Host qas.q.abci.ai
+    User <ABCIQ_USERNAME>
+    IdentityFile ~/.ssh/id_ed25519_abciq
+    StrictHostKeyChecking accept-new

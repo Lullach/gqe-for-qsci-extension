@@ -1,0 +1,11 @@
+# Force LF line endings for files that must run on Linux.
+#
+# A shell script checked out with CRLF fails on Linux with a confusing
+# "bad interpreter: /bin/bash^M: No such file or directory". These are edited on
+# Windows but executed on the ABCI-Q cluster, so pin them to LF regardless of
+# the local core.autocrlf setting.
+*.sh        text eol=lf
+*.def       text eol=lf
+*.py        text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf

@@ -66,3 +66,6 @@ outputs/*
 *metadata.json
 debug.py
 nohup.out
+
+# ABCI-Q personal account settings (username / group) — never commit
+hpc/env.local.sh
