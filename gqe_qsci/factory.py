@@ -186,14 +186,36 @@ class Factory:
 
     def _expand_molecule_set(self, cfg):
         """
-        Turn a molecule_set config into a list of (name, split, molecule_cfg).
+        Turn a molecule_set config into a list of
+        (name, split, molecule_cfg, x_value).
 
-        Currently supports the bond-scan form (a `base` linear-chain molecule +
-        train/eval bond-length lists). A general `molecules: [...]` list form for
-        heterogeneous molecules (Phase 4) can be added here without touching
-        callers.
+        Two forms are supported:
+
+        1. Bond scan (Phase 3) — one `base` linear-chain molecule plus
+           train/eval bond-length lists. x_value is the bond length, so the
+           summary charts plot against it.
+
+        2. Heterogeneous molecules (Phase 4) — an explicit `molecules:` list of
+           {name, split, molecule: <cfg>} entries, which may differ in atoms,
+           active space and QUBIT COUNT. x_value is None (there is no single
+           scan coordinate), so the per-molecule metrics are still logged but
+           the dissociation-curve summaries are skipped.
         """
         ms = cfg.molecule_set
+
+        if ms.get("molecules") is not None:
+            entries = []
+            for m in ms.molecules:
+                split = m.get("split", "train")
+                assert split in ("train", "eval"), (
+                    f"molecule '{m.get('name')}' has split='{split}', "
+                    "expected 'train' or 'eval'"
+                )
+                entries.append((str(m.name), split, m.molecule, None))
+            if not entries:
+                raise ValueError("molecule_set.molecules is empty.")
+            return entries
+
         base = ms.base
         assert base.geometry.type == "linear_chain", (
             "bond-scan molecule_set requires geometry.type == 'linear_chain'"
@@ -257,7 +279,9 @@ class Factory:
                 qubit_footprints=pool.get_qubit_footprints(),
                 commutation_matrix=pool.get_commutation_matrix(),
                 x_value=x_value,
-                x_label="bond_length",
+                # Heterogeneous sets have no single scan coordinate, so
+                # x_value is None there and the summary curves are skipped.
+                x_label="bond_length" if x_value is not None else "molecule",
             )
             _log.info(
                 "Bundle %-10s (%s): V=%d, n_qubits=%d",

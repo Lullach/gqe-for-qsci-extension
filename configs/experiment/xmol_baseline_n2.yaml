@@ -1,0 +1,40 @@
+# @package _global_
+# BASELINE for the Phase 4 cross-molecule experiment: the same feature-based
+# policy trained directly ON N2, single-molecule.
+#
+# This is what the zero-shot number from `xmol_dag_gnn` must be compared
+# against. Without it "zero-shot reached X mHa" means nothing — the honest
+# question is how much of the trained-on-N2 performance transfer recovers.
+#
+# Matched to xmol_dag_gnn on everything that affects difficulty: same model,
+# same pool settings, same shots, same dmax, same rollout size. max_iters=100
+# gives N2 the same ~100 rollout groups each training molecule gets there
+# (200 epochs round-robined over 2 molecules).
+defaults:
+  - override /molecule: n2
+  - override /model: dag_gnn_features
+
+exp_tag: xmol-baseline-n2-s${trainer.seed}
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: xmol-lih-h2o-to-n2
+  tags: ["cross-molecule", "phase4", "baseline", "trained-on-n2", "dag", "featscorer"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 50
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

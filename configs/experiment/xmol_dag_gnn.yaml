@@ -1,0 +1,46 @@
+# @package _global_
+# PHASE 4 — cross-molecule generalization (the thesis experiment).
+#
+# One feature-based policy trained on LiH (10q) + H2O (12q), evaluated ZERO-SHOT
+# on N2 (16q) — a molecule it never trains on, with a different active space and
+# a different operator vocabulary.
+#
+# Read the result against two references, both logged automatically:
+#   zeroshot/n2/...      what this policy achieves on N2 without ever seeing it
+#   R-CASCI / R-CCSD     N2's own exact and coupled-cluster energies
+# and against the from-scratch baseline `xmol_baseline_n2`, which trains a
+# policy ON N2 for the same number of rollout groups. Zero-shot approaching the
+# baseline is the claim; matching CASCI is the ceiling.
+#
+# Seeds: submit several with trainer.seed=... (see EXPERIMENTS.md). Every result
+# so far is single-seed with 10-sample GRPO advantages, which is the main reason
+# earlier comparisons were inconclusive.
+defaults:
+  - override /molecule_set: cross_molecule
+  - override /model: dag_gnn_features
+
+exp_tag: xmol-dag-gnn-s${trainer.seed}
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: xmol-lih-h2o-to-n2
+  tags: ["cross-molecule", "phase4", "dag", "GNN", "featscorer", "zeroshot"]
+trainer:
+  max_iters: 200          # 2 train molecules -> ~100 rollout groups each
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10         # must equal num_samples (one molecule per group)
+  step_per_epoch: 30
+  load_checkpoint: false  # multi-molecule resume is not supported
+  checkpoint_every_n_iters: 50
+  eval_every: 10          # zero-shot pass on N2 every 10 epochs
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

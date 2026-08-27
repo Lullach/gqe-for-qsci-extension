@@ -1,0 +1,65 @@
+# Phase 4: heterogeneous molecules — DIFFERENT qubit counts, active spaces and
+# operator pools. This is the real cross-molecule generalization test; the N2
+# bond scan (Phase 3) only varied geometry within one molecule.
+#
+#   train : LiH  (2e,5o)  -> 10 qubits
+#           H2O  (8e,6o)  -> 12 qubits, V~43
+#   eval  : N2   (10e,8o) -> 16 qubits, V~154   (zero-shot, never trained on)
+#
+# N2 is deliberately the held-out molecule: it is the largest, the most
+# strongly correlated (stretched triple bond), and the one every earlier
+# experiment used — so we have plenty of trained-on-N2 numbers to compare the
+# zero-shot result against.
+#
+# H2 is deliberately EXCLUDED: at (2e,2o) its pool has only 2 operators
+# (vocab_size=2), which is degenerate and teaches the policy nothing.
+#
+# Requires a feature-based model (feature_scorer: true). The integer-ID head
+# cannot transfer: vocabulary size and operator meaning differ per molecule.
+#
+# Select with:  python train.py molecule_set=cross_molecule
+molecules:
+  - name: lih
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Li', 'H']
+        bond_length: 1.6
+      basis: 'sto-3g'
+      nelecas: 2
+      norbcas: 5
+      spin: 0
+      charge: 0
+
+  - name: h2o
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: custom
+        geometry: [
+          ['O', [0.000000,  0.000000,  0.117300]],
+          ['H', [0.000000,  0.757200, -0.469200]],
+          ['H', [0.000000, -0.757200, -0.469200]],
+        ]
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 6
+      spin: 0
+      charge: 0
+
+  - name: n2
+    split: eval          # zero-shot target
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['N', 'N']
+        bond_length: 2.5
+      basis: 'sto-3g'
+      nelecas: 10
+      norbcas: 8
+      spin: 0
+      charge: 0
