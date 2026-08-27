@@ -82,7 +82,11 @@ $$q(x_t | x_0): \text{each token masked with prob } (1 - \alpha_t), \quad \alpha
 
 The reverse process uses the exact closed-form posterior $q(x_{t-1} | x_t, \hat{x}_0)$, revealing masked positions progressively from $t = T$ down to $t = 1$.
 
-**log_prob.** Estimated via the denoising ELBO averaged over all $T$ timesteps. Corruption masks are **pre-sampled** once during rollout collection (`sample_masks()`) and stored in the replay buffer, making the GRPO importance-weight ratio $\exp(\log p_\text{new} - \log p_\text{old})$ deterministic and stable across policy updates.
+**log_prob.** The **exact log-probability of the sampled reverse trajectory** (DDPO-style, [Black et al., 2023](https://arxiv.org/abs/2305.13301)):
+
+$$\log p_\theta(\tau) = \sum_t \sum_{i \text{ committed at } t} \log p_\theta(x_0^i \mid x_t, t)$$
+
+`sample_sequence` records `state["reveal_step"]` — the timestep at which each position was committed — and `log_prob` replays exactly those decisions, scoring each position once. GRPO needs the probability of the *action sequence taken*, and the θ-independent reveal coins cancel in the importance ratio $\exp(\log p_\text{new} - \log p_\text{old})$, leaving only these terms. This replaced an earlier denoising-ELBO implementation, which bounded $\log p(x_0)$ and measured reconstructability rather than the sampler's own distribution; see `NOTES.md`.
 
 **Noise schedule.** Configurable as `cosine` (recommended) or `linear` via `noise_schedule`.
 
@@ -92,14 +96,14 @@ The reverse process uses the exact closed-form posterior $q(x_{t-1} | x_t, \hat{
 
 **Theory.** Classical analogue of the USS (Unitary Single-Sampling) architecture from *Quantum Denoising Diffusion Models* ([Kölle et al., 2024](https://arxiv.org/abs/2401.07049)). The entire reverse process collapses into **one transformer forward pass**: the model predicts all gate positions simultaneously from the fully-masked sequence at $t = T$, without iterative unmasking.
 
-**log_prob.** Exact (no ELBO averaging), fully deterministic — the best possible importance-weight stability for GRPO.
+**log_prob.** Exact and fully deterministic. Its trajectory is a single step ($x_T \to x_0$), so unlike the absorbing model it needs no trajectory record at all.
 
 **Trade-offs.**
 
 | | Absorbing (T=16) | Single-Shot |
 |---|---|---|
 | Inference | T forward passes | 1 forward pass (T× faster) |
-| log_prob | ELBO approximation | Exact |
+| log_prob | exact, T-step trajectory | exact, 1-step trajectory |
 | Task difficulty | Easier (step-by-step) | Harder (direct mapping) |
 
 Weights are architecturally compatible with the absorbing model; warm-starting from a trained absorbing checkpoint is supported via `trainer.warm_start_checkpoint`.
@@ -117,7 +121,7 @@ Weights are architecturally compatible with the absorbing model; warm-starting f
 | `chain` (default) | bidirectional $i \leftrightarrow i+1$ | Encodes gate ordering; 6 layers covers the full L=10 sequence |
 | `full` | all pairs $i \to j$, $i \neq j$ | Equivalent to Transformer attention without softmax; ablation baseline |
 
-**Implementation** (`gqe_qsci/gqe/models/gnn.py`). The edge index is computed once in `__init__` and registered as a buffer (no per-forward-pass overhead). GAT layers use `concat=False` (heads averaged, not concatenated) with residual connections and per-layer LayerNorm to prevent over-smoothing in deep networks. The diffusion logic (forward process, reverse process, ELBO log_prob, mask pre-sampling) is identical to `CircuitDiffusionModelAbsorbing`.
+**Implementation** (`gqe_qsci/gqe/models/gnn.py`). The edge index is computed once in `__init__` and registered as a buffer (no per-forward-pass overhead). GAT layers use `concat=False` (heads averaged, not concatenated) with residual connections and per-layer LayerNorm to prevent over-smoothing in deep networks. The diffusion logic (reverse process, trajectory recording, trajectory log_prob) is identical to `CircuitDiffusionModelAbsorbing`.
 
 **Requirement.** Needs `torch_geometric` (`pip install torch_geometric`).
 

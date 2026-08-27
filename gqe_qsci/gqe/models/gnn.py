@@ -301,48 +301,25 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
     def _refresh_mask_token(self):
         self.mask_token = self.vocab_size
 
-    # --- forward process ---------------------------------------------------
-
-    def _corrupt(self, x_0: torch.Tensor, t: torch.Tensor):
-        """Sample x_t ~ q(x_t | x_0) via absorbing forward process."""
-        alpha_t   = self.alpha[t].to(x_0.device)
-        keep_prob = alpha_t.unsqueeze(1).expand_as(x_0)
-        is_clean  = torch.bernoulli(keep_prob).bool()
-        x_t = torch.where(
-            is_clean,
-            x_0,
-            x_0.new_full(x_0.shape, self.mask_token),
-        )
-        return x_t, is_clean
-
-    # --- mask pre-sampling -------------------------------------------------
-
-    def sample_masks(self, gate_tokens: torch.Tensor) -> torch.Tensor:
-        """
-        Pre-sample corruption masks for all T timesteps.
-        Returns (B, T, L) bool tensor — True where a token is masked.
-        """
-        B, L   = gate_tokens.shape
-        device = gate_tokens.device
-        masks  = torch.zeros(
-            B, self.diffusion_steps, L, dtype=torch.bool, device=device
-        )
-        for t_int in range(1, self.diffusion_steps + 1):
-            t           = torch.full((B,), t_int, dtype=torch.long, device=device)
-            _, is_clean = self._corrupt(gate_tokens, t)
-            masks[:, t_int - 1, :] = ~is_clean
-        return masks
-
     # --- reverse process / sampling ----------------------------------------
 
     def sample_sequence(self, state, inv_temperature):
-        """Generate gate sequence via the absorbing reverse process."""
+        """
+        Generate gate sequence via the absorbing reverse process.
+
+        Records the trajectory in state["reveal_step"] — (B, L) long, the
+        timestep at which each position was committed. See
+        CircuitDiffusionModelAbsorbing.sample_sequence for the full rationale.
+        """
         batch_size = state["idx"].shape[0]
         device     = state["idx"].device
 
         tokens = torch.full(
             (batch_size, self.ngates), self.mask_token,
             dtype=torch.long, device=device,
+        )
+        reveal_step = torch.zeros(
+            batch_size, self.ngates, dtype=torch.long, device=device
         )
 
         for step in range(self.diffusion_steps, 0, -1):
@@ -367,64 +344,77 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
                 .logical_and(is_masked)
             )
             tokens = torch.where(reveal, x0_pred, tokens)
-
-        # Safety net for any still-masked positions
-        still_masked = tokens.eq(self.mask_token)
-        if still_masked.any():
-            t0     = torch.zeros(batch_size, dtype=torch.long, device=device)
-            tokens = torch.where(
-                still_masked,
-                self._logits(tokens, t0).argmax(dim=-1),
-                tokens,
+            reveal_step = torch.where(
+                reveal, torch.full_like(reveal_step, step), reveal_step
             )
 
-        state["idx"] = torch.cat((state["idx"], tokens), dim=1)
+        # Safety net (effectively never fires: p_reveal at t=1 is ~1 - 7e-8).
+        # Sample rather than argmax so the token keeps a well-defined sampling
+        # log-probability; reveal_step stays 0, which log_prob handles as t=0.
+        still_masked = tokens.eq(self.mask_token)
+        if still_masked.any():
+            t0      = torch.zeros(batch_size, dtype=torch.long, device=device)
+            logits0 = self._logits(tokens, t0)
+            sampled = Categorical(logits=-inv_temperature * logits0).sample()
+            tokens  = torch.where(still_masked, sampled, tokens)
+
+        state["idx"]         = torch.cat((state["idx"], tokens), dim=1)
+        state["reveal_step"] = reveal_step
         return state
 
     # --- log-probability ---------------------------------------------------
 
-    def log_prob(self, indices, inv_temperature, return_entropy=False, masks=None):
+    def log_prob(self, indices, inv_temperature, return_entropy=False, reveal_step=None):
         """
-        Denoising ELBO averaged over all T timesteps.
+        Exact log-probability of the sampled reverse trajectory (DDPO-style):
 
-        masks : (B, T, L) bool, optional — pre-sampled corruption masks from
-                sample_masks(). When provided the ELBO is deterministic, which
-                stabilises the GRPO importance-weight ratio.
+            log p_θ(τ) = Σ_t Σ_{i committed at t} log p_θ(x_0[i] | x_t, t)
+
+        Each position is scored once, at the step it was committed. Replaces
+        the earlier denoising-ELBO implementation; see
+        CircuitDiffusionModelAbsorbing.log_prob and NOTES.md for why.
+
+        reveal_step : (B, L) long, REQUIRED — from state["reveal_step"].
+        Returns     : (B, L) per-position log-probabilities.
         """
         gate_tokens = indices[:, 1:]
         B, L        = gate_tokens.shape
         device      = gate_tokens.device
 
+        if reveal_step is None:
+            raise ValueError(
+                f"{type(self).__name__}.log_prob requires reveal_step (the "
+                "trajectory recorded by sample_sequence into "
+                "state['reveal_step']). A trajectory log-probability is "
+                "undefined without the trajectory that produced it."
+            )
+        reveal_step = reveal_step.to(device)
+
         total_logp    = torch.zeros(B, L, device=device)
         total_entropy = torch.zeros(B, L, device=device) if return_entropy else None
 
-        for t_int in range(1, self.diffusion_steps + 1):
-            t = torch.full((B,), t_int, dtype=torch.long, device=device)
+        for t_int in sorted(reveal_step.unique().tolist(), reverse=True):
+            committed = reveal_step.eq(t_int)
+            visible   = reveal_step.gt(t_int)      # committed at a LATER step
+            x_t = torch.where(
+                visible,
+                gate_tokens,
+                gate_tokens.new_full(gate_tokens.shape, self.mask_token),
+            )
 
-            if masks is not None:
-                is_masked = masks[:, t_int - 1, :]
-                x_t = torch.where(
-                    is_masked,
-                    gate_tokens.new_full(gate_tokens.shape, self.mask_token),
-                    gate_tokens,
-                )
-            else:
-                x_t, is_clean = self._corrupt(gate_tokens, t)
-                is_masked     = ~is_clean
-
+            t          = torch.full((B,), t_int, dtype=torch.long, device=device)
             logits     = self._logits(x_t, t)
             log_probs  = F.log_softmax(-inv_temperature * logits, dim=-1)
             token_logp = torch.gather(
                 log_probs, 2, gate_tokens.unsqueeze(-1)
             ).squeeze(-1)
 
-            total_logp += token_logp * is_masked.float()
+            total_logp = total_logp + token_logp * committed.float()
 
             if return_entropy:
-                entropy        = -(log_probs.exp() * log_probs).sum(dim=-1)
-                total_entropy += entropy * is_masked.float()
+                entropy       = -(log_probs.exp() * log_probs).sum(dim=-1)
+                total_entropy = total_entropy + entropy * committed.float()
 
-        avg_logp = total_logp / self.diffusion_steps
         if return_entropy:
-            return avg_logp, total_entropy / self.diffusion_steps
-        return avg_logp
+            return total_logp, total_entropy
+        return total_logp

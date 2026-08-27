@@ -7,7 +7,8 @@
 # ============================================================================ #
 # Modifications Copyright (c) 2026 Ryota Kemmoku
 # Modified from the original file in NVIDIA CUDA-QX.
-# Changes made: store `log_prob` and optional diffusion masks in the replay buffer.
+# Changes made: store `log_prob` and the optional diffusion trajectory
+# (reveal_step) in the replay buffer.
 
 
 from collections import deque
@@ -24,15 +25,18 @@ class ReplayBuffer:
         self.size = size
         self.buf = deque(maxlen=capacity)
 
-    def push(self, seq, energy, old_log_probs, masks=None):
+    def push(self, seq, energy, old_log_probs, reveal_step=None):
         """
         Store one rollout sample.
 
-        masks : (B, T, L) bool tensor — pre-sampled diffusion corruption masks
-                returned by CircuitDiffusionModelAbsorbing.sample_masks().
-                None for non-diffusion models (GPT-2, SimpleGNN, …).
+        reveal_step : (L,) long tensor — the absorbing-diffusion trajectory,
+                i.e. the timestep at which each gate position was committed
+                (state["reveal_step"] from sample_sequence). log_prob() needs
+                it to score the exact path that was sampled.
+                None for models whose trajectory is implicit in the gate
+                sequence itself (GPT-2, single-shot, DAG GNN).
         """
-        self.buf.append((seq, energy, old_log_probs, masks))
+        self.buf.append((seq, energy, old_log_probs, reveal_step))
         if len(self.buf) > self.size:
             self.buf.popleft()
             
@@ -46,12 +50,12 @@ class ReplayBuffer:
             
     def __getitem__(self, idx):
         item = self.buf[idx]
-        seq, energy, old_log_probs, masks = item
+        seq, energy, old_log_probs, reveal_step = item
         return {
             "idx": seq,
             "energy": energy,
             "old_log_probs": old_log_probs,
-            "masks": masks,   # may be None for non-absorbing models
+            "reveal_step": reveal_step,   # None for non-absorbing models
         }
 
     def __len__(self):
@@ -70,7 +74,7 @@ class BufferDataset(Dataset):
             "idx": sample["idx"],
             "energy": sample["energy"],
             "old_log_probs": sample["old_log_probs"],
-            "masks": sample["masks"],   # may be None for non-absorbing models
+            "reveal_step": sample["reveal_step"],   # None for non-absorbing models
         }
     
     def __len__(self):
@@ -81,27 +85,27 @@ def buffer_collate_fn(batch):
     """
     Custom collate function for BufferDataset.
 
-    Handles the optional 'masks' field which is a (T, L) bool tensor for
-    absorbing-diffusion models and None for all other models (GPT-2, Simple).
-    PyTorch's default collate cannot mix tensors and None values, so we
-    strip out masks, collate the rest normally, then re-attach them.
+    Handles the optional 'reveal_step' field: an (L,) long tensor for the
+    absorbing-diffusion models and None for all others (GPT-2, single-shot,
+    DAG GNN). PyTorch's default collate cannot mix tensors and None values, so
+    we strip it out, collate the rest normally, then re-attach.
 
-    If all masks are None  → collated["masks"] = None
-    If all masks are tensors → collated["masks"] = stacked (B, T, L) tensor
+    If all are None   → collated["reveal_step"] = None
+    If all are tensors → collated["reveal_step"] = stacked (B, L) tensor
     Mixed (shouldn't happen in practice) → None entries filled with zeros.
     """
-    masks_list = [item["masks"] for item in batch]
-    non_mask_batch = [{k: v for k, v in item.items() if k != "masks"} for item in batch]
-    collated = default_collate(non_mask_batch)
+    rs_list = [item["reveal_step"] for item in batch]
+    rest = [{k: v for k, v in item.items() if k != "reveal_step"} for item in batch]
+    collated = default_collate(rest)
 
-    if all(m is None for m in masks_list):
-        collated["masks"] = None
+    if all(r is None for r in rs_list):
+        collated["reveal_step"] = None
     else:
-        ref = next(m for m in masks_list if m is not None)
+        ref = next(r for r in rs_list if r is not None)
         filled = [
-            m if m is not None else torch.zeros_like(ref)
-            for m in masks_list
+            r if r is not None else torch.zeros_like(ref)
+            for r in rs_list
         ]
-        collated["masks"] = torch.stack(filled, dim=0)
+        collated["reveal_step"] = torch.stack(filled, dim=0)
 
     return collated

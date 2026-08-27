@@ -476,7 +476,7 @@ class CircuitDAGGNNPolicy(Policy):
         state["idx"] = torch.cat((state["idx"], ops_tensor), dim=1)
         return state
 
-    def log_prob(self, indices, inv_temperature, return_entropy=False, masks=None):
+    def log_prob(self, indices, inv_temperature, return_entropy=False, reveal_step=None):
         """
         Exact log p_θ(a_1, …, a_L) = Σ_t log p_θ(a_t | DAG_{t-1}).
 
@@ -484,7 +484,10 @@ class CircuitDAGGNNPolicy(Policy):
         computing the conditional log-probability at each step.  Fully
         deterministic — same sequence always yields the same value.
 
-        masks is accepted for API compatibility but silently ignored.
+        This is already a trajectory log-probability: the gate sequence IS the
+        trajectory, so nothing extra needs recording and reveal_step is
+        accepted for API compatibility but ignored.
+
         Returns (B, L) per-step log-probabilities.
         """
         gate_tokens = indices[:, 1:]           # strip BOS  (B, L)

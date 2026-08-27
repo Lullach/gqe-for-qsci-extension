@@ -395,9 +395,71 @@ every other), which is expensive on real hardware. Sparse-SYK approximations
 
 ---
 
+## Trajectory log-prob (DDPO) replaces the ELBO — IMPLEMENTED
+
+**What changed.** `CircuitDiffusionModelAbsorbing` and
+`CircuitGNNModelAbsorbing` previously scored circuits with a denoising ELBO
+averaged over all T timesteps, using corruption masks pre-sampled by
+`sample_masks()` and frozen in the replay buffer. Both now compute the **exact
+log-probability of the reverse trajectory that was actually sampled**:
+
+```
+log p_θ(τ) = Σ_t Σ_{i committed at t} log p_θ(x_0[i] | x_t, t)
+```
+
+`sample_sequence` records `state["reveal_step"]` — (B, L) long, the timestep at
+which each position was committed. `log_prob` reconstructs the state the network
+saw at step t via **visible ⟺ reveal_step > t** and scores each position exactly
+once. Returns (B, L), same as before, so `GRPOLoss` is untouched.
+`sample_masks()` and `_corrupt()` are deleted (git history has the ELBO version).
+
+**Why.** GRPO needs the probability of the *action sequence taken*, not of the
+final object. For absorbing diffusion the true `p(x_0)` is intractable (it
+marginalises over all L! reveal orders), which is why the ELBO was there — but
+the ELBO measures *reconstructability of x_0*, which is not the sampler's
+distribution, so the importance ratio was a ratio of surrogates. The reveal
+coins are θ-independent and therefore cancel in `exp(log p_new − log p_old)`,
+leaving exactly the categorical terms above. This is the DDPO formulation:
+*Training Diffusion Models with Reinforcement Learning* (Black et al., 2023);
+cf. DPOK (Fan et al., 2023). It also makes absorbing consistent with
+single-shot and the DAG GNN, which were already exact-trajectory.
+
+**Secondary benefits.**
+- No `sample_masks`, no frozen-mask bookkeeping; the trajectory *is* the record.
+- Storage (B, L) ints instead of (B, T, L) bools.
+- Forward passes = number of *distinct commit steps* ≤ T (skips steps that
+  committed nothing). NB the saving shrinks as B·L grows, since the loop runs
+  over the union of steps across the batch — at B=6, L=8, T=8 all 8 steps were
+  used, i.e. no saving. Treat this as "never worse", not as a speedup.
+- The safety net now *samples* instead of `argmax`, so every token has a
+  well-defined sampling log-probability. It effectively never fires:
+  `p_reveal` at t=1 is `(α_0 − α_1)/(1 − α_1 + 1e-8)` with α_0 = 1 exactly,
+  i.e. ≈ 1 − 7e-8. `reveal_step = 0` marks such positions and the
+  `visible ⟺ reveal_step > t` rule handles t=0 uniformly.
+
+**The one argument for the ELBO** (worth remembering if this underperforms):
+gradient *density*. The ELBO scored every masked position at every timestep
+(~L·T/2 terms); the trajectory scores each position once (L terms). Denser but
+biased, vs sparser but exact. DDPO's evidence favours exact; an A/B on the
+existing N2 setup would settle it here (ELBO results already exist from before
+this change).
+
+**Verified** (no cudaq/PyG needed, `diffusion.py` is torch-only): the states
+`log_prob` reconstructs match, element-wise, every state the network actually
+saw during `sample_sequence` (instrumented `_logits`); two calls agree
+bit-for-bit; every position is scored exactly once; forward passes equal the
+number of distinct commit steps; missing `reveal_step` raises; gradients flow;
+buffer collate/pickle round-trips both the tensor and the `None` case.
+
+---
+
 ## Alternative diffusion formulations
 
-### Uniform noise (D3PM absorbing → D3PM uniform)
+### Uniform noise (D3PM absorbing → D3PM uniform) — OPEN QUESTION
+
+> **Parked question (Lukas):** *why do masked/absorbing diffusion at all —
+> why not ordinary diffusion starting from a random gate sequence?*
+> Not yet answered; the sketch below is the starting point.
 
 The current model uses *absorbing* diffusion: tokens are masked (replaced by
 a single MASK token). An alternative is **uniform noise**: at each step a
@@ -409,6 +471,9 @@ token can transition to *any* other gate with some probability.
   uniform component rather than a delta on MASK.
 - Advantage: no special MASK token needed; every intermediate sample is a
   valid gate sequence.
+- Note: `CircuitDiffusionModelSimple` is *almost* this (it starts from uniformly
+  random tokens and re-samples every position each step) but has no principled
+  forward process and a proxy log_prob, so it is not a fair test of the idea.
 - Reference: *Structured Denoising Diffusion Models in Discrete State-Spaces*
   (Austin et al., 2021).
 

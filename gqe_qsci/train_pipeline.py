@@ -429,26 +429,28 @@ class TrainPipeline(pl.LightningModule):
             qsci_result = self.qsci_pipeline.process(state)
             energies = torch.tensor(qsci_result.energies, device=self.device)
 
-            # Pre-sample diffusion masks if the model supports it (Fix 4).
-            # Storing masks in the buffer makes log_prob() deterministic during
-            # the GRPO training step, stabilising the importance-weight ratio.
-            masks_all = None
-            if hasattr(self.model, "sample_masks"):
-                masks_all = self.model.sample_masks(state["idx"][:, 1:])  # (B, T, L)
+            # Trajectory record, if the model produced one. The absorbing
+            # diffusion models write state["reveal_step"] (B, L) in
+            # sample_sequence: the timestep at which each gate was committed.
+            # Their log_prob scores exactly that path, so it must be carried
+            # through the buffer to the training step. Models whose trajectory
+            # is implicit in the gate sequence (GPT-2, single-shot, DAG GNN)
+            # produce nothing here.
+            traj = state.get("reveal_step")
 
             # log-probs under the behavior policy at rollout time
-            lp_kwargs = {} if masks_all is None else {"masks": masks_all}
+            lp_kwargs = {} if traj is None else {"reveal_step": traj}
             old_log_probs = self.model.log_prob(
                 state["idx"], self.scheduler.get_inverse_temperature(), **lp_kwargs
             )
 
-            masks_iter = masks_all if masks_all is not None else [None] * len(energies)
-            for seq, energy, olp, msk in zip(state["idx"], energies, old_log_probs, masks_iter):
+            traj_iter = traj if traj is not None else [None] * len(energies)
+            for seq, energy, olp, tr in zip(state["idx"], energies, old_log_probs, traj_iter):
                 self.buffer.push(
                     seq.detach().cpu(),
                     energy.detach().cpu(),
                     olp.detach().cpu(),
-                    msk.detach().cpu() if msk is not None else None,
+                    tr.detach().cpu() if tr is not None else None,
                 )
             self._update_bests(qsci_result, energies)
 
@@ -474,9 +476,11 @@ class TrainPipeline(pl.LightningModule):
             if torch.is_tensor(v):
                 batch[k] = v.to(self.device)
 
-        # Pass pre-sampled masks if available (Fix 4: deterministic ELBO)
-        batch_masks = batch.get("masks")   # None for GPT-2 / Simple
-        lp_kwargs = {} if batch_masks is None else {"masks": batch_masks}
+        # Replay the SAME trajectory the rollout sampled, so the GRPO ratio
+        # exp(new - old) reflects only the weight update. None for models whose
+        # trajectory is implicit in the gate sequence.
+        batch_traj = batch.get("reveal_step")
+        lp_kwargs = {} if batch_traj is None else {"reveal_step": batch_traj}
 
         # Entropy regularization coefficient (Fix 5). 0.0 disables it.
         entropy_coeff = getattr(self.config.trainer, "entropy_coeff", 0.0)

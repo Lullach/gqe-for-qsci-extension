@@ -269,9 +269,25 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
         is sampled from the model's prediction at each step.
         Positions that are already revealed are never changed again.
 
-    log_prob
-        Denoising ELBO averaged over all T timesteps — deterministic per
-        sequence, which keeps the GRPO importance-weight ratio stable.
+    log_prob — exact TRAJECTORY log-probability (DDPO-style)
+        sample_sequence records which timestep committed each position
+        (state["reveal_step"]); log_prob replays exactly those decisions:
+
+            log p_θ(τ) = Σ_t Σ_{i committed at t} log p_θ(x_0[i] | x_t, t)
+
+        This is EXACT — it is the probability of the action sequence the
+        policy actually took, which is what a policy gradient needs. The
+        θ-independent reveal coins cancel in the GRPO importance ratio, so
+        only these categorical terms remain.
+
+        Replaces an earlier denoising-ELBO implementation (with pre-sampled
+        corruption masks via sample_masks()). The ELBO bounds log p(x_0) and
+        measures reconstructability, which does NOT correspond to the
+        sampler's distribution; it also required freezing corruption masks in
+        the replay buffer to keep the ratio deterministic. The trajectory form
+        needs none of that, is cheaper, and matches what the single-shot and
+        DAG-GNN policies already do. See NOTES.md, "Trajectory log-prob (DDPO)
+        replaces the ELBO"; the ELBO version is in git history.
 
     Noise schedule
         Controlled by the 'noise_schedule' constructor argument
@@ -314,33 +330,6 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
         # [MASK] lives just past the (possibly changed) real vocabulary.
         self.mask_token = self.vocab_size
 
-    # --- forward process ---------------------------------------------------
-
-    def _corrupt(self, x_0: torch.Tensor, t: torch.Tensor):
-        """
-        Sample  x_t ~ q(x_t | x_0).
-
-        Each token is kept with probability α_t and replaced by [MASK]
-        with probability (1 − α_t), independently across positions.
-
-        x_0 : (B, L)  clean gate indices
-        t   : (B,)    integer timesteps in [1, T]
-
-        Returns
-        -------
-        x_t      : (B, L)  corrupted sequence  (some entries == mask_token)
-        is_clean : (B, L)  bool — True where the original token was kept
-        """
-        alpha_t   = self.alpha[t].to(x_0.device)             # (B,)
-        keep_prob = alpha_t.unsqueeze(1).expand_as(x_0)      # (B, L)
-        is_clean  = torch.bernoulli(keep_prob).bool()         # (B, L)
-        x_t = torch.where(
-            is_clean,
-            x_0,
-            x_0.new_full(x_0.shape, self.mask_token),
-        )
-        return x_t, is_clean
-
     # --- reverse process / sampling ----------------------------------------
 
     def sample_sequence(self, state, inv_temperature):
@@ -355,6 +344,11 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
         derived from the exact posterior  q(x_{t-1} | x_t, x_0).
 
         A token that has been revealed is never changed again.
+
+        Records the TRAJECTORY in state["reveal_step"] — a (B, L) long tensor
+        holding, for each position, the timestep at which it was committed.
+        log_prob() needs it to score the exact path that was sampled; see the
+        class docstring.
         """
         batch_size = state["idx"].shape[0]
         device     = state["idx"].device
@@ -363,6 +357,11 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
         tokens = torch.full(
             (batch_size, self.ngates), self.mask_token,
             dtype=torch.long, device=device,
+        )
+        # reveal_step[b, i] = t at which position i was committed.
+        # 0 is reserved for the safety net below (see there).
+        reveal_step = torch.zeros(
+            batch_size, self.ngates, dtype=torch.long, device=device
         )
 
         for step in range(self.diffusion_steps, 0, -1):
@@ -389,113 +388,107 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
                 .logical_and(is_masked)
             )
             tokens = torch.where(reveal, x0_pred, tokens)
-
-        # Safety net: fill any positions still masked after all steps
-        # (can happen at very low T due to discretisation of p_reveal)
-        still_masked = tokens.eq(self.mask_token)
-        if still_masked.any():
-            t0     = torch.zeros(batch_size, dtype=torch.long, device=device)
-            tokens = torch.where(
-                still_masked,
-                self._logits(tokens, t0).argmax(dim=-1),
-                tokens,
+            reveal_step = torch.where(
+                reveal, torch.full_like(reveal_step, step), reveal_step
             )
 
-        state["idx"] = torch.cat((state["idx"], tokens), dim=1)
+        # Safety net: fill any position still masked after the loop.
+        # p_reveal at t=1 is (α_0 − α_1)/(1 − α_1 + 1e-8) with α_0 = 1 exactly,
+        # i.e. ~1 − 7e-8, so this fires only on an astronomically unlikely
+        # Bernoulli miss. Sample (rather than argmax) so the token still has a
+        # well-defined sampling log-probability, and leave reveal_step at 0 —
+        # log_prob's "visible iff reveal_step > t" rule then handles t=0
+        # uniformly with every other step.
+        still_masked = tokens.eq(self.mask_token)
+        if still_masked.any():
+            t0      = torch.zeros(batch_size, dtype=torch.long, device=device)
+            logits0 = self._logits(tokens, t0)
+            sampled = Categorical(logits=-inv_temperature * logits0).sample()
+            tokens  = torch.where(still_masked, sampled, tokens)
+
+        state["idx"]         = torch.cat((state["idx"], tokens), dim=1)
+        state["reveal_step"] = reveal_step
         return state
-
-    # --- mask pre-sampling ---------------------------------------------------
-
-    def sample_masks(self, gate_tokens: torch.Tensor) -> torch.Tensor:
-        """
-        Pre-sample the corruption masks for all T timesteps.
-
-        Calling this once during rollout collection and storing the result in
-        the replay buffer removes the stochasticity from log_prob().  The GRPO
-        importance-weight ratio  exp(log_p_new − log_p_old)  is then computed
-        with exactly the same masked positions in both the old and new policy
-        passes, making the ratio much more stable.
-
-        gate_tokens : (B, L)  clean gate indices (no BOS)
-        Returns     : (B, T, L) bool tensor — True where a token is masked.
-                      Index convention: masks[:, t-1, :] corresponds to
-                      timestep t  (1-indexed, matching the log_prob loop).
-        """
-        B, L   = gate_tokens.shape
-        device = gate_tokens.device
-        masks  = torch.zeros(
-            B, self.diffusion_steps, L, dtype=torch.bool, device=device
-        )
-        for t_int in range(1, self.diffusion_steps + 1):
-            t           = torch.full((B,), t_int, dtype=torch.long, device=device)
-            _, is_clean = self._corrupt(gate_tokens, t)
-            masks[:, t_int - 1, :] = ~is_clean
-        return masks
 
     # --- log-probability ---------------------------------------------------
 
-    def log_prob(self, indices, inv_temperature, return_entropy=False, masks=None):
+    def log_prob(self, indices, inv_temperature, return_entropy=False, reveal_step=None):
         """
-        Estimate  log p_θ(x_0)  via the denoising ELBO averaged over all T
-        timesteps.
+        Exact log-probability of the sampled reverse TRAJECTORY (DDPO-style).
 
-        For each t in {1, …, T}:
-          1. Corrupt x_0 → x_t (either from pre-sampled masks or fresh).
-          2. Ask the model for  log p_θ(x_0[i] | x_t, t)  at masked positions.
-        Average the per-token log-probs across timesteps.
+            log p_θ(τ) = Σ_t Σ_{i committed at t} log p_θ(x_0[i] | x_t, t)
+
+        Each position is scored exactly once — at the step it was committed —
+        so this returns (B, L) with no averaging.
+
+        Why the trajectory and not the ELBO: GRPO needs the probability of the
+        action sequence actually taken, and the reveal coins are θ-independent
+        so they cancel in the importance ratio exp(log p_new − log p_old),
+        leaving only the categorical terms above. This is exact, whereas the
+        ELBO is a bound on log p(x_0) that does not correspond to the sampler.
+        See NOTES.md, "Trajectory log-prob (DDPO) replaces the ELBO".
+
+        x_t is reconstructed from reveal_step: position i is visible at step t
+        iff reveal_step[i] > t (it was committed at some later, i.e. larger,
+        step). Only the steps that actually committed something are visited.
 
         Parameters
         ----------
-        masks : (B, T, L) bool tensor, optional
-            Pre-sampled corruption masks as returned by sample_masks().
-            When provided, the same masked positions used during rollout
-            collection are reused here, making the GRPO importance-weight
-            ratio  exp(log_p_new − log_p_old)  deterministic and stable.
-            When None, fresh masks are sampled on every call (original
-            behaviour — fine for logging / evaluation, noisy for training).
+        reveal_step : (B, L) long, REQUIRED
+            Per-position commit timestep, as recorded by sample_sequence into
+            state["reveal_step"] and carried through the replay buffer.
 
-        Returns : (B, L) per-token log-probability estimates
+        Returns : (B, L) per-position log-probabilities
         """
         gate_tokens = indices[:, 1:]          # strip BOS token  (B, L)
         B, L        = gate_tokens.shape
         device      = gate_tokens.device
 
+        if reveal_step is None:
+            raise ValueError(
+                f"{type(self).__name__}.log_prob requires reveal_step (the "
+                "trajectory recorded by sample_sequence into "
+                "state['reveal_step']). A trajectory log-probability is "
+                "undefined without the trajectory that produced it."
+            )
+        reveal_step = reveal_step.to(device)
+
         total_logp    = torch.zeros(B, L, device=device)
         total_entropy = torch.zeros(B, L, device=device) if return_entropy else None
 
-        for t_int in range(1, self.diffusion_steps + 1):
-            t = torch.full((B,), t_int, dtype=torch.long, device=device)
+        # Only steps that committed something anywhere in the batch matter.
+        # Descending mirrors the reverse process, though order is irrelevant
+        # here since each step is scored independently from its own x_t.
+        steps = sorted(reveal_step.unique().tolist(), reverse=True)
 
-            if masks is not None:
-                # Deterministic path: reconstruct x_t from stored masks
-                is_masked = masks[:, t_int - 1, :]                        # (B, L)
-                x_t = torch.where(
-                    is_masked,
-                    gate_tokens.new_full(gate_tokens.shape, self.mask_token),
-                    gate_tokens,
-                )
-            else:
-                # Stochastic path: sample fresh masks (eval / Simple compat)
-                x_t, is_clean = self._corrupt(gate_tokens, t)
-                is_masked     = ~is_clean                                  # (B, L)
+        for t_int in steps:
+            committed = reveal_step.eq(t_int)                              # (B, L)
+            # State the model saw at step t: everything committed LATER
+            # (larger t) is already visible; the rest is still [MASK].
+            visible = reveal_step.gt(t_int)                                # (B, L)
+            x_t = torch.where(
+                visible,
+                gate_tokens,
+                gate_tokens.new_full(gate_tokens.shape, self.mask_token),
+            )
 
-            logits     = self._logits(x_t, t)                             # (B, L, V)
-            log_probs  = F.log_softmax(-inv_temperature * logits, dim=-1)     # (B, L, V)
+            t          = torch.full((B,), t_int, dtype=torch.long, device=device)
+            logits     = self._logits(x_t, t)                              # (B, L, V)
+            log_probs  = F.log_softmax(-inv_temperature * logits, dim=-1)  # (B, L, V)
             token_logp = torch.gather(
                 log_probs, 2, gate_tokens.unsqueeze(-1)
             ).squeeze(-1)                                                  # (B, L)
 
-            # Only masked positions require actual prediction
-            total_logp += token_logp * is_masked.float()
+            # Score ONLY the positions committed at this step.
+            total_logp = total_logp + token_logp * committed.float()
 
             if return_entropy:
-                entropy        = -(log_probs.exp() * log_probs).sum(dim=-1)
-                total_entropy += entropy * is_masked.float()
+                entropy       = -(log_probs.exp() * log_probs).sum(dim=-1)
+                total_entropy = total_entropy + entropy * committed.float()
 
-        avg_logp = total_logp / self.diffusion_steps
         if return_entropy:
-            return avg_logp, total_entropy / self.diffusion_steps
-        return avg_logp
+            return total_logp, total_entropy
+        return total_logp
 
 
 # ---------------------------------------------------------------------------
@@ -596,18 +589,18 @@ class CircuitDiffusionModelSingleShot(_CircuitDiffusionBase):
 
     # --- log-probability ---------------------------------------------------
 
-    def log_prob(self, indices, inv_temperature, return_entropy=False, masks=None):
+    def log_prob(self, indices, inv_temperature, return_entropy=False, reveal_step=None):
         """
         Exact log p_θ(x_0 | x_T) — no ELBO approximation.
 
         The model always conditions on the fully-masked sequence at t = T,
         so log_prob is deterministic: the same sequence always yields the
         same value regardless of when it is called.  This gives the best
-        possible importance-weight stability in GRPO without needing to
-        store or replay masks.
+        possible importance-weight stability in GRPO.
 
-        masks is accepted for API compatibility but silently ignored —
-        there is no stochasticity to fix here.
+        This IS already a trajectory log-probability — the trajectory has a
+        single step (x_T -> x_0), so there is nothing to record and
+        reveal_step is accepted for API compatibility but ignored.
         """
         gate_tokens = indices[:, 1:]          # strip BOS token  (B, L)
         B, L        = gate_tokens.shape
