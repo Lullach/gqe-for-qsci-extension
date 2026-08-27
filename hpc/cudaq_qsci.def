@@ -25,8 +25,18 @@ From: ghcr.io/nvidia/cudaqx:0.4.0
     python3 -m pip install numpy scipy mpi4py
 
     # PyCI: CI Hamiltonian diagonalisation. Built from source, as in dockerfile.
+    #
+    # NOTE: `cd /` before deleting the source tree. Unlike a Dockerfile — where
+    # every RUN is a fresh shell with WORKDIR reset — %post is ONE continuous
+    # shell, so removing the directory the shell is standing in leaves an
+    # invalid cwd and every later command dies with
+    #   FileNotFoundError ... os.getcwd()
     git clone https://github.com/theochem/pyci.git /tmp/pyci
-    cd /tmp/pyci && make && python3 -m pip install . && rm -rf /tmp/pyci
+    cd /tmp/pyci
+    make
+    python3 -m pip install .
+    cd /
+    rm -rf /tmp/pyci
 
     # Project dependencies, installed WITHOUT the project itself (no `-e .`),
     # so the image stays code-free. Keep this list in sync with pyproject.toml.
