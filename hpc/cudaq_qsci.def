@@ -59,6 +59,11 @@ From: ghcr.io/nvidia/cudaqx:0.4.0
     python3 -m pip install torch_geometric
 
 %environment
+    # NOTE: do not rely on this section. Converting a .sif to a --sandbox
+    # regenerates /.singularity.d/ and DISCARDS %environment, which silently
+    # dropped PYTHONPATH and broke `import gqe_qsci`. The job scripts therefore
+    # pass every variable below explicitly via `singularity exec --env`.
+    # This block only helps for ad-hoc `singularity exec` on a .sif.
     export PYTHONPATH=/workspace:${PYTHONPATH:-}
     export PYTHONUNBUFFERED=1
     # Match the local Docker workflow: avoid the ucx PML that isn't available.

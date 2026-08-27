@@ -55,8 +55,17 @@ echo
 . "$REPO/hpc/jobs/_stage_container.sh"
 
 echo "=== training ==="
+# Environment is set EXPLICITLY here rather than relying on the def file's
+# %environment: converting a .sif to a sandbox regenerates .singularity.d/ and
+# drops it, so PYTHONPATH silently vanished and `import gqe_qsci` failed.
 singularity exec --nv \
     --bind "$REPO:/workspace" \
+    --env PYTHONPATH=/workspace \
+    --env PYTHONUNBUFFERED=1 \
+    --env OMP_NUM_THREADS=1 \
+    --env OMPI_MCA_pml=ob1 \
+    --env OMPI_MCA_btl=self,tcp \
+    --env OMPI_MCA_opal_warn_on_missing_libcuda=0 \
     --env WANDB_MODE=offline \
     --env WANDB_DIR=/workspace/outputs \
     --workdir /workspace \
