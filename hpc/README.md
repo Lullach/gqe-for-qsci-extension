@@ -142,6 +142,17 @@ You will need `wandb login` (once, on the login node) before the first sync.
 
 ## Notes / gotchas
 
+- **The container is a SANDBOX directory, not a `.sif`.** On this system a `.sif`
+  larger than ~4 GB fails to mount with
+  `kernel reported a bad superblock for squashfs image partition`. The image is
+  not corrupt — the superblock is valid, compression is plain gzip, and
+  `unsquashfs -l` lists all ~107k files. Bisection (busybox 2 MB ✓, tiny
+  fakeroot build 2.2 MB ✓, cuda-quantum base 3.0 GB ✓, full 7.0 GB image ✗)
+  rules out compression, Lustre, fakeroot and corruption, leaving size. Our
+  stack is ~7 GB (3 GB base + ~4 GB torch/CUDA) and will not fit under 4 GB, so
+  `build_image.sh` builds a sandbox directory instead. Uses ~14 GB and many
+  inodes; start-up cost is irrelevant next to a multi-hour run. `SANDBOX=0`
+  builds a `.sif` if the stack ever shrinks.
 - **Build on the login node, not in a job.** The `docker pull` and `pip install`
   steps need internet.
 - **`.sif` location.** Default `~/images/` (home has a 500 GB quota). To share

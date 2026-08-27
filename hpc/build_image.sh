@@ -1,16 +1,42 @@
 #!/bin/bash
-# Build the GQE-QSCI Singularity image on the ABCI-Q login node (qes).
+# Build the GQE-QSCI Singularity container on the ABCI-Q login node (qes).
 #
 #   cd ~/gqe-for-qsci/hpc && bash build_image.sh
 #
-# Takes a while (pulls a multi-GB base image, compiles PyCI) and writes
-# ~/images/cudaq_qsci.sif. Run it on the LOGIN node, not in a job: compute
-# nodes typically have no outbound internet for the docker pull / pip installs.
+# Takes a while (pulls a multi-GB base image, compiles PyCI) and writes a
+# SANDBOX directory at ~/images/cudaq_sandbox. Run it on the LOGIN node, not in
+# a job: compute nodes have no outbound internet for the docker pull / pip
+# installs.
+#
+# WHY A SANDBOX AND NOT A .sif
+# ----------------------------
+# On this system a .sif larger than ~4 GB fails to mount:
+#     FATAL: ... kernel reported a bad superblock for squashfs image partition
+# The image is NOT corrupt - `unsquashfs -l` lists all ~107k files fine, the
+# superblock is valid, compression is plain gzip. Verified by bisection:
+#     busybox 2 MB (pull)                -> mounts OK
+#     tiny 2.2 MB (--fakeroot + %post)   -> mounts OK
+#     cuda-quantum base 3.0 GB (pull)    -> mounts OK
+#     this image 7.0 GB (--fakeroot)     -> FAILS
+# So it is neither compression, Lustre, fakeroot nor corruption - it is size
+# (the classic 4 GiB boundary). Our stack is ~7 GB (base 3 GB + torch/CUDA
+# ~4 GB) and cannot realistically be squeezed under 4 GB, so we skip squashfs
+# entirely and use a sandbox directory. Costs ~14 GB of disk and many inodes,
+# but container start-up is irrelevant next to a multi-hour training run.
+#
+# Set SANDBOX=0 to build a .sif instead (fine if the stack ever shrinks).
 set -euo pipefail
 
 DEF="$(cd "$(dirname "$0")" && pwd)/cudaq_qsci.def"
 IMAGE_DIR="${IMAGE_DIR:-$HOME/images}"
-SIF="${SIF:-$IMAGE_DIR/cudaq_qsci.sif}"
+SANDBOX="${SANDBOX:-1}"
+if [ "$SANDBOX" = "1" ]; then
+    SIF="${SIF:-$IMAGE_DIR/cudaq_sandbox}"
+    BUILD_ARGS="--sandbox"
+else
+    SIF="${SIF:-$IMAGE_DIR/cudaq_qsci.sif}"
+    BUILD_ARGS=""
+fi
 
 mkdir -p "$IMAGE_DIR"
 
@@ -58,7 +84,7 @@ fi
 
 echo
 echo "== building (this takes a while) =="
-time singularity build --fakeroot "$SIF" "$DEF"
+time singularity build --fakeroot $BUILD_ARGS "$SIF" "$DEF"
 
 echo
 echo "== done =="

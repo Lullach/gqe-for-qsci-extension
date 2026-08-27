@@ -28,7 +28,7 @@ set -euo pipefail
 cd "${PBS_O_WORKDIR:-$PWD}"
 
 REPO="${REPO:-$PWD}"
-SIF="${SIF:-$HOME/images/cudaq_qsci.sif}"
+SIF="${SIF:-$HOME/images/cudaq_sandbox}"
 EXPERIMENT="${EXPERIMENT:?set EXPERIMENT, e.g. qsub -v EXPERIMENT=n2_bond_scan_dag_gnn hpc/jobs/train.sh}"
 EXTRA="${EXTRA:-}"
 
@@ -42,7 +42,7 @@ echo "extra      : ${EXTRA:-<none>}"
 echo "date       : $(date)"
 echo "=================================================="
 
-if [ ! -f "$SIF" ]; then
+if [ ! -e "$SIF" ]; then
     echo "ERROR: image not found: $SIF   (build it with hpc/build_image.sh)" >&2
     exit 1
 fi
