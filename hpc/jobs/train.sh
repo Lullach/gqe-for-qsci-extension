@@ -50,6 +50,10 @@ fi
 nvidia-smi || echo "WARNING: nvidia-smi failed on the host"
 
 echo
+# Copy the sandbox to node-local scratch: Lustre cannot back the overlay that
+# --nv requires. See _stage_container.sh.
+. "$REPO/hpc/jobs/_stage_container.sh"
+
 echo "=== training ==="
 singularity exec --nv \
     --bind "$REPO:/workspace" \

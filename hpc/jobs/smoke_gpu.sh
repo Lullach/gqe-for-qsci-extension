@@ -43,6 +43,11 @@ echo "=== nvidia-smi (host) ==="
 nvidia-smi || echo "WARNING: nvidia-smi failed on the host"
 
 echo
+# Copy the sandbox to node-local scratch: Lustre cannot back the overlay that
+# --nv requires. See _stage_container.sh.
+. "$REPO/hpc/jobs/_stage_container.sh"
+
+echo
 echo "=== running smoke test inside the container ==="
 # --nv  : expose the NVIDIA GPU + driver into the container
 # --bind: mount the repo at /workspace (the image contains no project code)
