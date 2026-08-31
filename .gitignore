@@ -69,3 +69,13 @@ nohup.out
 
 # ABCI-Q personal account settings (username / group) — never commit
 hpc/env.local.sh
+
+# Files the cluster writes INSIDE the repo directory. They embed the account
+# name and home paths (/home/<user>/...), so committing them from the cluster
+# would publish that to a public repo. Ignore them by pattern rather than
+# relying on remembering.
+#   PBS job stdout/stderr: <jobname>.o<jobid> / .e<jobid>
+*.o[0-9]*
+*.e[0-9]*
+#   container build logs written next to the def file
+hpc/*.log
