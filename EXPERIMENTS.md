@@ -105,6 +105,68 @@ held-out geometries (1.45, 3.2) is step 6, not yet wired.
 docker run --rm --entrypoint /bin/bash -e WANDB_API_KEY=<KEY> -e OMPI_MCA_pml=ob1 -e OMPI_MCA_btl=self,tcp -e OMPI_MCA_opal_warn_on_missing_libcuda=0 -v "${workdir}:/workspace" -w /workspace gqe_qsci_cpu -lc "pip install torch_geometric && python3 train.py experiment=n2_bond_scan_dag_gnn"
 ```
 
+## Phase 4 — cross-molecule: LiH + H2O -> zero-shot N2 (ABCI-Q)
+
+The thesis experiment. One feature-based policy trains on LiH (10 qubits) and
+H2O (12 qubits) and is evaluated **zero-shot on N2 (16 qubits)** — different
+molecule, different active space, different operator vocabulary. Contrast with
+the Phase 3 bond scan, which kept N2 throughout and varied only geometry.
+
+Read the zero-shot number against `xmol_baseline_n2`, the same policy trained
+directly on N2. Alone it means nothing; the question is how much of
+trained-on-N2 performance transfer recovers.
+
+```bash
+ssh abciq
+cd ~/gqe-for-qsci && git pull && source hpc/env.local.sh
+```
+
+**1. Gate** (qubit-count swaps; passed 26/26 locally, confirm on GPU):
+
+```bash
+qsub -W group_list=$ABCIQ_GROUP hpc/jobs/smoke_cross_molecule.sh
+```
+
+**2. Pilot** — one seed of each, to check timing and sanity before spending on
+six jobs:
+
+```bash
+qsub -W group_list=$ABCIQ_GROUP -v EXPERIMENT=xmol_dag_gnn,EXTRA="trainer.seed=1" hpc/jobs/train.sh
+qsub -W group_list=$ABCIQ_GROUP -v EXPERIMENT=xmol_baseline_n2,EXTRA="trainer.seed=1" hpc/jobs/train.sh
+```
+
+**3. Timing check after ~30 min** — `train.sh` requests 24 h walltime and the
+per-rollout cost is dominated by QSCI diagonalisation, which is CPU-bound and
+NOT accelerated by the H100, so the GPU does not make this proportionally
+faster:
+
+```bash
+grep -c "^Epoch" gqe_train.o*        # epochs completed so far
+```
+
+Extrapolate: `xmol_dag_gnn` needs **200** epochs, `xmol_baseline_n2` **100**.
+If 30 min buys ~5 epochs, the xmol run needs ~20 h — uncomfortably close to the
+limit. Either resubmit with `-l walltime=48:00:00` or lower `trainer.max_iters`.
+
+**4. Remaining seeds**, once the pilot looks healthy:
+
+```bash
+for s in 2 3; do
+  qsub -W group_list=$ABCIQ_GROUP -v EXPERIMENT=xmol_dag_gnn,EXTRA="trainer.seed=$s" hpc/jobs/train.sh
+  qsub -W group_list=$ABCIQ_GROUP -v EXPERIMENT=xmol_baseline_n2,EXTRA="trainer.seed=$s" hpc/jobs/train.sh
+done
+```
+
+**5. Sync and analyse:**
+
+```bash
+singularity exec ~/images/cudaq_sandbox wandb sync ~/gqe-for-qsci/outputs/gqe-for-qsci/xmol-*/wandb/offline-run-*
+singularity exec ~/images/cudaq_sandbox python3 hpc/analyze_xmol.py
+```
+
+`analyze_xmol.py` prints the zero-shot and baseline errors against N2's CASCI
+in mHa, mean +/- sd across seeds, and the generalization gap between them.
+
 ## Docker on Windows
 
 CUDA-Q 0.12.0 is not available as a native Windows Python package, so the
