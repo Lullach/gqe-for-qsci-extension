@@ -1677,6 +1677,36 @@ and comparable, so they are not normalized.
 
 ---
 
+## Thesis TODO: make ELBO vs trajectory log-prob an ablatable flag
+
+The DDPO change **replaced** the ELBO surrogate with the exact reverse-trajectory
+log-probability rather than putting it behind a switch. The change is
+theoretically well-motivated — the ELBO bounds `log p(x_0)`, whereas policy
+gradient needs `log pi(action)`, and the trajectory log-prob *is* that (the DDPO
+argument, Black et al. 2023, arXiv:2305.13301) — and it also removes the
+mask-resampling noise that previously destabilised the GRPO importance ratio.
+
+But because the old path is gone, **there is no experiment to point to** if a
+reviewer asks "did the exact trajectory log-prob actually help?". Comparing
+against the older W&B runs is confounded by everything else that changed since.
+
+If this goes in the thesis, add:
+
+```yaml
+# configs/model/*.yaml
+log_prob_mode: trajectory   # or: elbo
+```
+
+branching inside `CircuitDiffusionModelAbsorbing.log_prob` (and the GNN twin),
+then run the A/B on N2 at fixed seed. The ELBO implementation is recoverable
+from git history (the commit before `5786019`). Cheap to add; the only reason
+not to do it now is that it is not on the critical path to the cross-molecule
+result.
+
+Note the two modes need different buffer contents (`reveal_step` vs the old
+per-timestep `masks`), so the flag has to switch what `collect_rollout` stores
+as well — that is the fiddly part, not the log_prob branch itself.
+
 ## Possible future modification: older rollout replay
 
 The original setup keeps `num_samples`, `batch_size`, `warmup_size`, and
