@@ -1,0 +1,35 @@
+# DAG GNN whose ACTION SPACE is orbital pointers rather than an operator pool.
+#
+# Same generative story as dag_gnn_features (build the circuit gate by gate, GNN
+# over the partial DAG, pool the frontier), but the pooled frontier is used as a
+# pointer query: a gate is assembled by pointing at four orbitals
+#   i (occupied) -> j (occupied, j > i) or STOP -> a (virtual) -> b
+# instead of indexing a CCSD-screened menu. See NOTES.md, "Pointer action space".
+#
+# The factory passes `pool` (not operator_features / footprints / a commutation
+# matrix) — the policy reads orbital features and active-space integrals from it,
+# and asks it to materialise each excitation it builds.
+#
+# hidden_size / num_layers / num_heads / dropout are matched to
+# dag_gnn_features.yaml so the first comparison isolates the action space.
+_target_: gqe_qsci.gqe.models.pointer_dag.PointerDAGGNNPolicy
+hidden_size: 128
+num_layers: 6
+num_heads: 4
+dropout: 0.1
+
+# Orbital encoder (the "menu" side): a graph transformer over the n spin-orbitals
+# with the pairwise features as an attention bias. Small on purpose — n is 16 for
+# N2, so this is nowhere near the capacity bottleneck.
+encoder_layers: 2
+encoder_heads: 4
+
+# Rotation angle for SINGLE excitations. MP2 gives them exactly zero
+# (Brillouin's theorem), which would make the gate an identity and waste a
+# circuit slot. This constant is a placeholder, not physics — see NOTES.md,
+# "Pointer action space: open decisions".
+single_angle: 0.1
+
+# Restrict the action space to doubles. Worth an ablation against single_angle:
+# with an arbitrary angle, a single may be worse than not offering it at all.
+allow_singles: true

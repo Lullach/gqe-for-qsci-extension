@@ -268,30 +268,77 @@ class CircuitDAGGNNPolicy(Policy):
             dim=0,
         )
 
+    def _assemble_node_embeddings(
+        self,
+        gate_embs: list[torch.Tensor],   # per placed gate, each (B, H)
+        batch: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """
+        (B, n_qubits + ngates, H) node embeddings for the POINTER action space,
+        where a gate has no operator ID to look up in _node_table().
+
+        Rows, in the same order _init_dag_state() lays out node indices:
+            [0, n_qubits)          qubit wires  ← qubit_encoder(orbital features)
+            [n_qubits, +len(gate_embs))  placed gates ← caller's gate embeddings
+            the remainder           unplaced slots ← the learned UNPLACED vector
+
+        Built functionally (cat of fresh tensors) rather than by overwriting a
+        buffer in place, because the gate embeddings carry gradients and an
+        in-place write into a saved tensor breaks autograd — the same hazard the
+        clones in _step_forward guard against.
+        """
+        if not self.feature_scorer:
+            raise RuntimeError(
+                "_assemble_node_embeddings requires feature_scorer=True "
+                "(qubit_encoder and unplaced_embedding only exist in that mode)."
+            )
+        qubit_h = self.qubit_encoder(self.orbital_features)        # (n_qubits, H)
+        parts = [qubit_h.unsqueeze(0).expand(batch, -1, -1)]
+
+        if gate_embs:
+            parts.append(torch.stack(gate_embs, dim=1))            # (B, n_placed, H)
+
+        n_unplaced = self.ngates - len(gate_embs)
+        if n_unplaced > 0:
+            parts.append(
+                self.unplaced_embedding.view(1, 1, -1).expand(batch, n_unplaced, -1)
+            )
+        return torch.cat(parts, dim=1)
+
     def _step_forward(
         self,
-        node_tokens: torch.Tensor,   # (B, num_nodes) long
+        node_tokens: torch.Tensor,   # (B, num_nodes) long — None if node_embs given
         frontier: torch.Tensor,      # (B, n_qubits)  long — node index per qubit
         edge_srcs: list[list[int]],  # per-sample source node indices
         edge_dsts: list[list[int]],  # per-sample destination node indices
         device: torch.device,
+        node_embs: torch.Tensor | None = None,   # (B, num_nodes, H)
     ) -> torch.Tensor:
         """
         One GNN forward pass over the current partial DAG.
         Returns mean-pooled frontier embeddings: (B, H).
+
+        node_embs lets the caller supply node embeddings directly instead of
+        having them looked up from node_tokens. The pool-based policy leaves it
+        None; the pointer action space passes the output of
+        _assemble_node_embeddings(), since a gate built from orbital pointers has
+        no operator index to look up. The caller must not mutate the tensor it
+        passes — build a fresh one per step.
         """
-        B, num_nodes = node_tokens.shape
+        if node_embs is None:
+            B, num_nodes = node_tokens.shape
 
-        # Clone both index tensors before any autograd-tracked operation.
-        # _advance_dag mutates node_tokens and frontier in-place after this
-        # call; embedding and gather save their index arguments in the backward
-        # graph, so in-place mutations would cause a version-mismatch error at
-        # loss.backward() without these clones.
-        node_tokens_s = node_tokens.clone()
-        frontier_s    = frontier.clone()
+            # Clone the index tensor before any autograd-tracked operation.
+            # _advance_dag mutates node_tokens and frontier in-place after this
+            # call; embedding and gather save their index arguments in the
+            # backward graph, so in-place mutations would cause a
+            # version-mismatch error at loss.backward() without these clones.
+            node_embs = self._node_table()[node_tokens.clone()]    # (B, num_nodes, H)
+        else:
+            B, num_nodes = node_embs.shape[0], node_embs.shape[1]
 
-        # Node features: token embedding + frontier flag embedding
-        node_embs = self._node_table()[node_tokens_s]              # (B, num_nodes, H)
+        frontier_s = frontier.clone()
         frontier_flags = torch.zeros(B, num_nodes, dtype=torch.long, device=device)
         # Set flag=1 for each frontier node (may overlap for multi-qubit gates)
         frontier_flags.scatter_(1, frontier_s, torch.ones_like(frontier_s))

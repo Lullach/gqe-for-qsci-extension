@@ -78,6 +78,14 @@ class Factory:
         # used when the model config sets feature_scorer: true, so passing it
         # unconditionally is harmless.
         target = getattr(cfg.model, "_target_", "") or ""
+        if "PointerDAGGNNPolicy" in target:
+            # No menu: this policy builds excitations from orbital pointers and
+            # asks the pool to materialise them, so it takes the pool itself
+            # rather than operator_features / footprints / a commutation matrix.
+            # vocab_size above is only the CCSD pool's INITIAL size — the pool
+            # grows during training (OperatorPool.ensure_excitation), so nothing
+            # downstream may cache it.
+            return instantiate(cfg.model, pool=op_pool, ngates=cfg.ngates)
         if "CircuitDAGGNNPolicy" in target:
             return instantiate(
                 cfg.model,

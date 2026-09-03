@@ -1,0 +1,50 @@
+# @package _global_
+# FIRST RUN of the pointer action space, on N2 alone.
+#
+# Question: does a policy that builds excitations by pointing at orbitals reach
+# the same energy as one that picks from the CCSD-screened pool — given that it
+# can reach 315 excitations instead of the 117 CCSD kept, but has to find them
+# through four decisions per gate instead of one?
+#
+# Pair with `experiment=n2_pool_matched`, which is the SAME run with the pool
+# action space. Everything that affects difficulty is matched between the two:
+# molecule, ngates, hidden_size/num_layers/num_heads/dropout, shots, dmax,
+# rollout size, iterations, seed. The action space is the only difference.
+#
+# Gate cost is matched too: with operator_pool.only_use_first_pauli (the default,
+# true) a pool entry is ONE Pauli string of an excitation, and
+# make_excitation_operator() reproduces that, so a pointer gate compiles to the
+# same thing a pool gate does. See NOTES.md, "Pointer action space: open
+# decisions" — that convention is itself due an ablation afterwards.
+defaults:
+  - override /molecule: n2
+  - override /model: pointer_dag
+
+exp_tag: n2-pointer-s${trainer.seed}
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: pointer-vs-pool-n2
+  tags: ["pointer", "no-operator-pool", "dag", "n2"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  # MANDATORY for pointer runs. Pool indices are assigned by
+  # ensure_excitation() in whatever order sampling happens to visit, so an index
+  # from another run decodes to a different excitation. log_prob() raises rather
+  # than mis-decoding silently, but do not rely on that.
+  load_checkpoint: false
+  checkpoint_every_n_iters: 50
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

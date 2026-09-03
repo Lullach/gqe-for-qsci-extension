@@ -209,8 +209,121 @@ class UCCSDBasedPool(OperatorPool, ABC):
             commutes[i] = (anti % 2) == 0
         return commutes
 
+    # -----------------------------------------------------------------------
+    # Lazily grown pool, for the pointer action space (models/pointer.py)
+    # -----------------------------------------------------------------------
+    #
+    # A pointer policy does not choose an index into a precomputed menu; it
+    # builds an excitation from orbital pointers. But everything downstream —
+    # sampler.py's `[pool[j] for j in row]`, the replay buffer, QSCI — is keyed
+    # by integer index. So instead of changing that contract, the pool GROWS:
+    # ensure_excitation() appends an operator the first time it is generated and
+    # returns its index thereafter. The pool stops being a CCSD-screened menu and
+    # becomes a cache of what the policy has actually built.
+
+    def _tq_molecule(self):
+        """Cached tequila molecule; building it is the expensive part."""
+        cached = getattr(self, "_tq_mol_cache", None)
+        if cached is None:
+            lines = [f"{sym} {c[0]} {c[1]} {c[2]}"
+                     for sym, c in self.molecule.geometry]
+            cached = tq.Molecule(
+                geometry="\n".join(lines),
+                basis_set=self.molecule.basis,
+                active_orbitals=self.molecule.active_indices,
+                transformation="jordan-wigner",
+            )
+            self._tq_mol_cache = cached
+        return cached
+
+    def mp2_angle(self, occ_sos, virt_sos, single_angle: float = 0.1) -> float:
+        """
+        Rotation angle for one excitation, without CCSD.
+
+            2 * t_MP2  where  t = <ij||ab> / (eps_i + eps_j - eps_a - eps_b)
+
+        generate_excitations() reads 2*t out of the CCSD amplitude tensor; this
+        is the closed-form stand-in, computable from the HF orbital energies and
+        the active-space integrals alone.
+
+        SINGLES get exactly zero from Brillouin's theorem, which would make the
+        gate an identity and waste a circuit slot, so they fall back to
+        `single_angle`. That constant is a placeholder, not physics — singles do
+        not couple to the HF reference and only start to matter once doubles have
+        been applied. See NOTES.md, "Pointer action space: open decisions".
+        """
+        if len(occ_sos) != 2 or len(virt_sos) != 2:
+            return float(single_angle)
+
+        eps = numpy.asarray(self.molecule.active_mo_energy, dtype=numpy.float64)
+        denom = (sum(eps[q // 2] for q in occ_sos)
+                 - sum(eps[q // 2] for q in virt_sos))
+        if abs(denom) < 1e-12:
+            return 0.0
+        coupling = self._hf_coupling(occ_sos, virt_sos, self.molecule.cas_hamiltonian.h2,
+                                     signed=True)
+        return float(2.0 * coupling / denom)
+
+    def make_excitation_operator(self, pairs, angle: float):
+        """
+        One cudaq operator for the excitation given as (virtual, occupied) index
+        pairs — the form make_excitation_gate() expects.
+
+        Mirrors build_operator_pool's per-gate treatment: optionally strip the Z
+        ladder, convert the FIRST Pauli string, scale by the angle. Under
+        only_use_first_pauli (the default) a pool entry is already a single Pauli
+        fragment of an excitation, so returning one fragment here keeps a pointer
+        gate exactly as expensive as a pool gate and the comparison honest.
+        """
+        remove_z = getattr(self, "_remove_z_ladder", False)
+        circuit = self._tq_molecule().make_excitation_gate(
+            indices=[tuple(p) for p in pairs], angle=angle
+        )
+        for gate in circuit.gates:
+            for pauli in gate.generator.paulistrings:
+                if remove_z:
+                    pauli = {k: v for k, v in pauli.items() if v.lower() != 'z'}
+                term = convert_pauli_to_cudaq_spin(pauli)
+                return angle * cudaq.SpinOperator(term)
+        raise ValueError(f"excitation {pairs} produced no Pauli terms")
+
+    def ensure_excitation(self, key, pairs, angle: float | None = None,
+                          single_angle: float = 0.1) -> int:
+        """
+        Index of the pool operator implementing this excitation, appending it on
+        first sight. `key` is the caller's canonical identity for the excitation
+        (the pointer's (i, j, a, b) tuple); it is what makes the mapping
+        memoizable and, crucially, INVERTIBLE — log_prob has to recover the
+        excitation from a stored integer index when it replays the buffer.
+
+        Append-only: an index, once handed out, never changes meaning, so replay
+        buffers and checkpoints stay valid within a run. They do NOT survive a
+        restart, because the cache is rebuilt in whatever order the new run
+        happens to sample — run pointer experiments with load_checkpoint=false.
+        """
+        if not hasattr(self, "_excitation_index"):
+            self._excitation_index = {}
+            self.excitation_keys = {}
+
+        cached = self._excitation_index.get(key)
+        if cached is not None:
+            return cached
+
+        occ_sos = [int(p[1]) for p in pairs]
+        virt_sos = [int(p[0]) for p in pairs]
+        if angle is None:
+            angle = self.mp2_angle(occ_sos, virt_sos, single_angle=single_angle)
+
+        index = len(self.pool)
+        self.pool.append(self.make_excitation_operator(pairs, angle))
+        self._pool_amplitudes.append(float(angle))
+        self._excitation_index[key] = index
+        self.excitation_keys[index] = key
+        return index
+
     @staticmethod
-    def _hf_coupling(occ_sos: list[int], virt_sos: list[int], h2) -> float:
+    def _hf_coupling(occ_sos: list[int], virt_sos: list[int], h2,
+                     signed: bool = False) -> float:
         """
         |<Phi_0|H|Phi_exc>| for the excitation moving electrons from the given
         occupied spin-orbitals into the given virtual spin-orbitals.
@@ -231,16 +344,18 @@ class UCCSDBasedPool(OperatorPool, ABC):
         a_virt = [q // 2 for q in virt_sos if q % 2 == 0]
         b_virt = [q // 2 for q in virt_sos if q % 2 == 1]
 
+        keep = (lambda v: float(v)) if signed else (lambda v: abs(float(v)))
+
         if len(a_occ) == 1 and len(b_occ) == 1 and len(a_virt) == 1 and len(b_virt) == 1:
             # Opposite-spin double (covers pair doubles i_a i_b -> a_a a_b too)
-            return abs(float(h2[a_occ[0], a_virt[0], b_occ[0], b_virt[0]]))
+            return keep(h2[a_occ[0], a_virt[0], b_occ[0], b_virt[0]])
         if len(a_occ) == 2 and len(a_virt) == 2:
             (o1, o2), (v1, v2) = a_occ, a_virt
         elif len(b_occ) == 2 and len(b_virt) == 2:
             (o1, o2), (v1, v2) = b_occ, b_virt
         else:
             return 0.0  # spin-flip-like term: does not couple to the reference
-        return abs(float(h2[o1, v1, o2, v2] - h2[o1, v2, o2, v1]))
+        return keep(h2[o1, v1, o2, v2] - h2[o1, v2, o2, v1])
 
     def get_operator_features(self) -> numpy.ndarray:
         """
@@ -412,6 +527,12 @@ class PauliEvolutionPool(UCCSDBasedPool):
         return len(self.pool)
 
     def build_operator_pool(self, threshold, remove_z_ladder=False, only_use_first_pauli=False, dedup_excitations=False):
+        # Remembered so make_excitation_operator() can reproduce the same
+        # treatment for gates the pointer policy builds later (a pointer gate
+        # must cost the same as a pool gate for the comparison to be clean).
+        self._remove_z_ladder = bool(remove_z_ladder)
+        self._only_use_first_pauli = bool(only_use_first_pauli)
+
         uccsd_ansatz = self.make_uccsd_ansatz(
             threshold=threshold, dedup_excitations=dedup_excitations
         )

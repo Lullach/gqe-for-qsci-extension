@@ -82,22 +82,38 @@ class TrainPipeline(pl.LightningModule):
         first = self.train_bundles[0]
         self.model = self.factory.create_model(self.config, op_pool=first.pool)
 
+        # Step 5: global normalization over the pooled training set, so the same
+        # physical operator/orbital lands at the same coordinates in every
+        # molecule. Which table gets normalized depends on what the head scores.
         scorer = self._operator_scorer()
-        if scorer is None:
-            raise ValueError(
-                "molecule_set requires a feature-based model "
-                "(e.g. model=dag_gnn_features); the integer-ID head cannot "
-                "transfer across molecules."
+        encoder = self._orbital_encoder()
+        if scorer is not None:
+            train_feats = np.concatenate(
+                [b.operator_features for b in self.train_bundles], axis=0
             )
-
-        # Step 5: global normalization over the pooled training-set features.
-        train_feats = np.concatenate(
-            [b.operator_features for b in self.train_bundles], axis=0
-        )
-        scorer.set_normalization(
-            train_feats.mean(axis=0, keepdims=True),
-            train_feats.std(axis=0, keepdims=True),
-        )
+            scorer.set_normalization(
+                train_feats.mean(axis=0, keepdims=True),
+                train_feats.std(axis=0, keepdims=True),
+            )
+            n_normed = train_feats.shape[0]
+        elif encoder is not None:
+            # Pointer policy: there is no operator menu to normalize, only the
+            # orbital table and its pairwise features.
+            from gqe_qsci.gqe.models.pointer import build_orbital_inputs
+            pairs = [build_orbital_inputs(b.pool) for b in self.train_bundles]
+            encoder.set_normalization(
+                np.concatenate([o for o, _ in pairs], axis=0),
+                np.concatenate(
+                    [p.reshape(-1, p.shape[-1]) for _, p in pairs], axis=0
+                )[None, ...],
+            )
+            n_normed = sum(o.shape[0] for o, _ in pairs)
+        else:
+            raise ValueError(
+                "molecule_set requires a feature-based model (e.g. "
+                "model=dag_gnn_features or model=pointer_dag); the integer-ID "
+                "head cannot transfer across molecules."
+            )
 
         self._refs: dict[str, dict] = {}     # molecule name -> reference energies
         self.metric_logger = Logger(reference_energies=None)
@@ -105,8 +121,8 @@ class TrainPipeline(pl.LightningModule):
         self._rr = 0                         # round-robin pointer over train set
         _log.info(
             "Multi-molecule: %d train, %d eval; feature stats frozen over %d "
-            "operators.",
-            len(self.train_bundles), len(self.eval_bundles), train_feats.shape[0],
+            "rows.",
+            len(self.train_bundles), len(self.eval_bundles), n_normed,
         )
 
     def _operator_scorer(self):
@@ -114,6 +130,12 @@ class TrainPipeline(pl.LightningModule):
         share it), or None for an integer-ID model."""
         scorers = [m for m in self.model.modules() if isinstance(m, OperatorScorer)]
         return scorers[0] if scorers else None
+
+    def _orbital_encoder(self):
+        """The model's OrbitalEncoder, or None if it is not a pointer policy."""
+        from gqe_qsci.gqe.models.pointer import OrbitalEncoder
+        encs = [m for m in self.model.modules() if isinstance(m, OrbitalEncoder)]
+        return encs[0] if encs else None
 
     def _reference_energies(self, bundle):
         """Per-molecule reference energies, computed once and cached (disk-cached

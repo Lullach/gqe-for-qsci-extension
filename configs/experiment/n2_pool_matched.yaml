@@ -1,0 +1,40 @@
+# @package _global_
+# CONTROL for experiment=n2_pointer: the same policy on the same molecule with
+# the CCSD-screened operator pool as its action space.
+#
+# Without this, "the pointer reached X mHa" says nothing. The honest question is
+# whether removing the pool costs or buys anything, so every knob that affects
+# difficulty is identical to n2_pointer.yaml and only `model` differs.
+#
+# Note the asymmetry the comparison is measuring: this run picks from the 117
+# excitations CCSD kept (pool V = 118 including the identity); n2_pointer can
+# reach all 315 Sz-conserving singles and doubles, but has to assemble each one
+# from four pointer decisions rather than a single categorical draw.
+defaults:
+  - override /molecule: n2
+  - override /model: dag_gnn_features
+
+exp_tag: n2-pool-matched-s${trainer.seed}
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: pointer-vs-pool-n2
+  tags: ["pool", "baseline", "dag", "featscorer", "n2"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 50
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170
