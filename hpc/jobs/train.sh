@@ -68,6 +68,7 @@ singularity exec --nv \
     --env OMPI_MCA_opal_warn_on_missing_libcuda=0 \
     --env WANDB_MODE=offline \
     --env WANDB_DIR=/workspace/outputs \
+    --env HYDRA_FULL_ERROR="${HYDRA_FULL_ERROR:-1}" \
     --workdir /workspace \
     "$SIF" \
     python3 /workspace/train.py experiment="$EXPERIMENT" $EXTRA
