@@ -34,11 +34,24 @@ class Sampler:
         Returns:  
             List of sample_result objects or list of probability dictionaries  
         """  
-        res = []  
+        res = []
         idx_output = state["idx"]
-        pool = self.pool  
+        pool = self.pool
 
-        if cudaq.mpi.is_initialized():  
+        # Distribute across ranks ONLY when MPI sampling was actually requested.
+        # Keying this off cudaq.mpi.is_initialized() alone is wrong: `mpi: false`
+        # makes sample_state() return raw SampleResult objects (not async
+        # handles), and the gather below then hands those to mpi4py's
+        # allgather, which serialises with PICKLE — cudaq SampleResult is not
+        # picklable, so the run dies with
+        #     TypeError: cannot pickle ... cudaq_runtime.SampleResult
+        # It bites on any host where cudaq's MPI is initialised (ABCI-Q compute
+        # nodes) and never locally, which is why single-machine runs and the
+        # bond scan never caught it. It fails even with one rank, since
+        # allgather pickles regardless of rank count.
+        use_mpi = self.mpi and cudaq.mpi.is_initialized()
+
+        if use_mpi:
             rank = cudaq.mpi.rank()  
             numRanks = cudaq.mpi.num_ranks()  
             total_elements = len(idx_output)  
@@ -61,14 +74,17 @@ class Sampler:
                 for i, row in enumerate(idx_output)  
             ]  
 
-        # Handle async results if using MPI  
-        if self.mpi and isinstance(res[0], tuple) and len(res[0]) == 2:  
-            res = [getResultFunctor(handle) for (handle, getResultFunctor) in res]  
+        # Handle async results if using MPI
+        if self.mpi and isinstance(res[0], tuple) and len(res[0]) == 2:
+            res = [getResultFunctor(handle) for (handle, getResultFunctor) in res]
 
-        # Gather results from all MPI ranks  
-        if cudaq.mpi.is_initialized():  
-            res = MPI.COMM_WORLD.allgather(res)  
-            res = [x for xs in res for x in xs]  
+        # Gather results from all MPI ranks. Same guard as the split above —
+        # the two MUST agree, or one rank's worth of results is broadcast as if
+        # it were the whole batch (or, as before the fix, unpicklable objects
+        # are handed to allgather).
+        if use_mpi:
+            res = MPI.COMM_WORLD.allgather(res)
+            res = [x for xs in res for x in xs]
 
         return res
     
