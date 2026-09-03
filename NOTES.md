@@ -608,6 +608,104 @@ Caveat: at N2 (10e,8o)=3136 dets this is a *validation* (FCI known, so you see
 convergence rates); a genuine advantage test needs an active space beyond
 classical FCI, where HCI/DMRG is the only ceiling.
 
+## Dynamics pivot: GQE for time evolution instead of ground state
+
+Design sketch, nothing implemented. Motivated by the section above: ground-state
+advantage is contested, whereas Hamiltonian simulation has a cleaner story and
+an unarguable classical baseline (Trotter at matched depth).
+
+### What survives and what dies
+
+**Survives — the whole generator.** Operator pool, all five policy models, GRPO,
+the feature scorer, the DAG machinery. None of it knows what the reward means;
+it is a "pick a good sequence of Pauli evolutions" engine.
+
+**Dies — the whole evaluator.** QSCI is a ground-state tool: it diagonalises H
+in a sampled determinant subspace. Time evolution has nothing to diagonalise.
+`qsci/pipeline.py`, determinant extraction, PyCI, GEVP refinement all become
+irrelevant. **The project becomes "replace the reward", not "replace the model".**
+
+### The crux: scoring "this circuit ≈ U(t)"
+
+Ground state has an unusually friendly reward — variational, so any circuit is a
+valid upper bound and bad ones degrade gracefully. Matching a *unitary* is
+harder: you are approximating an operator, not preparing a state.
+
+| approach | cost | weakness |
+|---|---|---|
+| fidelity on one reference state | cheap | can match on \|psi_ref> and fail elsewhere |
+| average over random input states | moderate | statistical proxy for process fidelity |
+| Hilbert-Schmidt test (HST / local LHST) | moderate | the established method; LHST is the trainable variant |
+| full process fidelity | exponential | needs tomography |
+
+At this project's sizes (16 qubits) `expm(-iHt)` is classically computable, so
+the reward can be evaluated exactly on statevectors — arguably *easier* to
+prototype than the QSCI reward, with no sampling noise.
+
+### Version A — fixed t: learned Trotterization
+
+Variational quantum compiling for one t. The framing that fits this codebase:
+the pool is *already* Pauli evolutions e^{i theta P}, and Trotter expresses
+exp(-iHt) ~ prod_k exp(-i h_k P_k t/n) as exactly such a product. So this is
+**learned Trotterization** — instead of the fixed product formula, learn which
+Pauli evolutions in which order best approximate U(t) at a given gate budget.
+
+Baseline is clean and unarguable: standard Trotter at matched depth. Much
+crisper than the contested ground-state comparison.
+
+### Version B — general t: variational fast forwarding
+
+Learn ONE structure that evaluates any t at fixed depth, via an approximate
+diagonalisation
+
+    U(t) ~ W D(t) W^dagger
+
+with W a fixed circuit and D(t) diagonal with angles **linear in t**. This is
+Variational Fast Forwarding (Cirstoiu et al., npj QI 2020) — i.e. the
+"circuit with one parameter t" idea is a known, studied method.
+
+Why it does not violate the **no-fast-forwarding theorem** (generic H needs
+Omega(t) gates, so fixed depth cannot be accurate for arbitrary t): VFF is an
+*approximate* diagonalisation — accurate on a subspace or up to a horizon, not
+universally.
+
+Architecturally this is the "decouple structure from parameters" question:
+t must enter through the ANGLES, never the gate selection.
+
+- policy picks **structure** (W, and which diagonal generators)
+- angles are theta_k = lambda_k * t with learned lambda_k
+- reward = fidelity averaged over several sampled t
+
+### Two consequences for the pool
+
+**1. The pool should become the Pauli terms of H itself.** Ground state uses
+UCCSD excitations weighted by CCSD amplitudes. For dynamics the natural
+operators are the P_k in H = sum_k h_k P_k, and the natural feature is h_k —
+already available in `cas_hamiltonian`. More directly motivated than the
+excitation pool, and `get_operator_features()` would need a matching rewrite
+(h_k replaces the CCSD amplitude as the importance signal).
+
+**2. The commutation work stops being a null result and becomes central.**
+Trotter error is *governed by commutators* [P_i, P_j]: commuting terms reorder
+with zero error, and the leading error term sums over non-commuting pairs. So
+`get_commutation_matrix()`, the canonical/trace masking, and the DAG GNN's
+ordering structure — all of which measured as no-effect for QSCI (see "Result:
+canonical masking" and the trace redesign section) — are exactly the right
+machinery here. Gate ORDER genuinely matters for Trotter error in a way it did
+not for ground-state sampling.
+
+That is the most appealing part of this pivot: a chunk of already-built,
+already-verified work that produced no measurable gain would become load-bearing.
+
+### Caveats
+
+- The references (VFF; Khatri et al. *Quantum-assisted quantum compiling*, 2019
+  for HST/LHST; the no-fast-forwarding theorem) are recalled from memory —
+  verify before building on them.
+- The hard engineering is the REWARD, not the generator. Budget accordingly.
+- Version A is a well-scoped project with a clean baseline. Version B is a
+  research question bounded by the no-fast-forwarding limit. Do A first.
+
 ## Sample-efficiency / diversity reward ideas (design notes, not implemented)
 
 Context: the QSCI value proposition hinges on the *sampling* problem — the
@@ -1726,3 +1824,175 @@ trainer:
 This would make the training more replay-buffer/off-policy oriented, but it
 should be done carefully because GRPO/GSPO advantages are batch-relative and the
 current dataloader does not shuffle rollout groups.
+
+---
+
+## Thesis TODO: equal-weight feature normalization (ablation)
+
+`_init_multi_molecule` pools the operator rows of every training bundle and
+z-scores the concatenation:
+
+```python
+train_feats = np.concatenate([b.operator_features for b in self.train_bundles], axis=0)
+scorer.set_normalization(train_feats.mean(axis=0, keepdims=True),
+                         train_feats.std(axis=0, keepdims=True))
+```
+
+That is **operator-weighted**: a molecule contributes in proportion to its pool
+size, so the largest pool sets the scale. Defensible (it standardizes the
+operator distribution the policy actually sees during rollouts), but not the
+only option.
+
+Rejected alternative: pre-scaling each molecule's features by `1/V_m` before
+concatenation. Pool size is a property of the *sample*, not of the operator, so
+folding it into the feature vector either (a) computes stats on a distribution
+the model never sees — `set_features` stores raw features and `keys()`
+normalizes them at scoring time — or (b) makes the same physical operator land
+at different normalized coordinates depending on how many other operators share
+its pool, which is exactly the failure mode frozen stats exist to prevent.
+
+The right fix, if equal molecule weighting is wanted, is to reweight the
+*estimator*, not the data — mean of per-molecule means, plus the law of total
+variance so the between-molecule spread is not lost:
+
+```python
+mus   = np.stack([b.operator_features.mean(axis=0) for b in self.train_bundles])   # (M, F)
+vars_ = np.stack([b.operator_features.var(axis=0)  for b in self.train_bundles])   # (M, F)
+mu    = mus.mean(axis=0, keepdims=True)                        # (1, F)
+var   = (vars_ + (mus - mu) ** 2).mean(axis=0, keepdims=True)  # within + between
+scorer.set_normalization(mu, np.sqrt(var))
+```
+
+Every molecule counts once regardless of pool size; the feature values
+themselves are untouched, so the scale stays a fixed physical one.
+
+Not worth switching the default blind. Equal weighting matters most when the
+molecules are the unit of generalization and pool sizes are badly skewed —
+arguably the Phase 4 case (LiH/H2O -> N2, where N2 is both the largest pool and
+the held-out target, so the training set's largest molecule sets the scale).
+Put it behind a config flag and run the A/B: does transfer error to N2 move?
+
+Third option, addressing the underlying worry more directly: several columns
+(`amplitude`, `mp2`, `coupling`) are heavy-tailed, so mean/std is dominated by a
+few large-amplitude operators regardless of which molecule they came from.
+Median/IQR or a per-column quantile transform would be more robust than any
+reweighting of the mean.
+
+Related: numpy's `std` (ddof=0) here vs torch's `.std` (ddof=1) in
+`set_features` — ~0.1% apart at these pool sizes, but the two paths are not
+bit-identical if a single-molecule run is ever compared against a one-molecule
+`molecule_set`.
+
+---
+
+## Thesis TODO: revisit round-robin molecule scheduling
+
+Multi-molecule training currently walks the training set with a bare pointer:
+
+```python
+def _next_train_bundle(self):
+    b = self.train_bundles[self._rr % len(self.train_bundles)]
+    self._rr += 1
+    return b
+```
+
+One molecule per epoch, strict cyclic order, called from `on_train_epoch_start`
+and from the warmup loop in `on_fit_start`. Wanted: something better. The
+replacement is **not decided yet** — this note is here so the options are not
+re-derived from scratch.
+
+Why it may matter:
+
+- **Deterministic period.** With M training molecules the schedule has period M,
+  locked in phase with the epoch counter. Any other per-epoch cadence (LR
+  schedule, temperature schedule, eval interval) that shares a factor with M
+  aliases against it, so a given molecule can systematically land at the same
+  temperature every time it comes up.
+- **Uniform budget.** Every molecule gets identical rollout count regardless of
+  how far from converged it is. Easy molecules keep consuming QSCI evaluations
+  (the expensive part) after they have stopped improving.
+- **One molecule per gradient group.** `buffer_size == num_samples` is asserted
+  precisely so the buffer never mixes molecules, so each update is a
+  single-molecule gradient. The policy sees a molecule-correlated gradient
+  sequence rather than a mixed batch, which is the classic setup for
+  catastrophic drift toward whichever molecule came last.
+
+Candidate replacements, cheapest first:
+
+1. **Shuffled epochs** — permute `train_bundles` once per pass, consume, reshuffle.
+   Kills the phase-locking, ~4 lines, no other change. Do this first.
+2. **Sampling proportional to something** — pool size, current error vs CASCI, or
+   a bandit-style score on recent improvement. Spends the QSCI budget where the
+   model is still losing. Needs a stopping/normalization rule or it starves the
+   easy molecules entirely.
+3. **Mixed-molecule batches** — drop the one-molecule-per-group constraint and
+   collate rollouts from several bundles into one gradient step. Directly attacks
+   the drift problem and is the closest thing to standard multi-task training,
+   but it is the invasive option: `set_molecule()` swaps model buffers globally
+   (`_activate_bundle`), so scoring a mixed batch means either per-sample bundle
+   activation or making the scorer take the menu as an argument rather than
+   state. Also breaks the `buffer_size == num_samples` assert and the
+   per-molecule best-so-far tracking keyed off `_tracker_key`.
+
+If only one goes in the thesis, (1) is nearly free and (3) is the one with a
+real story attached.
+
+## Pointer action space: open decisions (REMIND ME)
+
+The pointer policy (`models/pointer.py`, `models/pointer_dag.py`) builds a gate
+from four pointers into the orbital table instead of indexing a CCSD-screened
+pool. Three choices were made to get a first run going, and each is a deliberate
+placeholder rather than a settled answer.
+
+### 1. `only_use_first_pauli` — currently ON, and probably shouldn't stay
+
+A pool entry under `only_use_first_pauli: true` is ONE Pauli string of an
+excitation generator, not the whole generator. `make_excitation_operator()`
+mirrors that, so a pointer gate costs exactly what a pool gate costs and the
+first comparison isolates the action space — the only difference between the two
+runs is that the pointer can reach all 315 N2 excitations instead of the 117
+CCSD kept.
+
+But it is a strange convention on its own terms: applying one Pauli fragment of
+exp(t (T - T^dag)) is not applying the excitation. It was presumably adopted to
+keep gate counts down. Once the matched comparison is done, run the ablation:
+
+    only_use_first_pauli: true   (matched, current)
+    only_use_first_pauli: false  (full generator per gate)
+
+with L reduced for the second so the COMPILED gate counts match rather than L.
+If the full generator wins, the fragment convention should be retired for both
+the pool and the pointer, and the earlier pool results re-read in that light.
+
+### 2. Single excitations get an arbitrary angle
+
+`mp2_angle()` returns 2*t_MP2, which is exactly zero for singles (Brillouin's
+theorem — singles do not couple to the HF reference). A zero angle makes the gate
+an identity and wastes a circuit slot, so singles fall back to `single_angle`
+(0.1 rad by default). That constant is not physics.
+
+Options, in order of how defensible they are:
+  - `allow_singles: false` — doubles only. Honest, and the N2 pool is dominated
+    by doubles anyway. Implemented, off by default.
+  - learn a per-gate angle scale alongside the pointer (a fifth decode step over
+    a small discrete set of angles).
+  - keep CCSD t1 just for singles. Cheap, but reintroduces the dependence the
+    whole design is trying to remove, so only as a diagnostic.
+
+### 3. CCSD still runs, even though the pointer never uses it
+
+`create_molecule_bundles()` builds a pool for every molecule, and that calls
+CCSD. The pointer policy ignores the resulting menu — it only reads
+`get_orbital_features()` and `cas_hamiltonian.h2` — but the cost is still paid
+and the claim "no CCSD in the loop" is not yet TRUE end to end. Removing it means
+a bundle variant that skips `build_operator_pool`, which is easy but touches the
+factory and every model that expects `operator_features`. Do it before making the
+no-CCSD claim in writing.
+
+### Also worth knowing
+
+Pointer pool indices are only meaningful WITHIN one run: `ensure_excitation()`
+fills the cache in whatever order sampling visits, so a replay buffer or
+checkpoint from another run maps indices to different excitations. `_to_picks()`
+raises rather than silently mis-decoding, but always run with
+`trainer.load_checkpoint=false` and a fresh `exp_tag`.
