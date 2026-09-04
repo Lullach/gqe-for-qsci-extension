@@ -6,12 +6,19 @@
 # how much of trained-on-H10 performance a policy that never saw H10 recovers.
 #
 # Matched on everything that affects difficulty: same model, same pool settings,
-# same ngates, same shots, same dmax, same rollout size. max_iters is 270 so
-# H10 gets the same ~270 rollout groups the 27-molecule training set delivers in
-# total (540 epochs round-robined; each training molecule sees 20, the set sees
-# 540). Two defensible choices exist here — match total gradient steps, or match
-# per-molecule groups — and this matches the former, which is the harder test
-# for zero-shot since the baseline gets every step on the target molecule.
+# same ngates, same shots, same dmax, same rollout size.
+#
+# max_iters matches the TOTAL TRAINING BUDGET. One epoch is one rollout group,
+# so hchain_dag_gnn's 540 epochs are 540 groups (20 on each of 27 molecules);
+# this run spends the same 540 entirely on H10. The only difference between the
+# two runs is then which molecules the budget went to, which is the comparison
+# the experiment exists to make.
+#
+# The alternative reading — match PER-MOLECULE groups, i.e. 20 — would be a
+# strawman: no one training for H10 would stop after 20 groups. Matching the
+# total is the harder, more honest test, since the baseline gets every step on
+# the target. (With the old 2-molecule set the two readings coincided at 100,
+# which is why xmol_baseline_n2 does not have to make the choice explicit.)
 defaults:
   - override /molecule: h10
   - override /model: dag_gnn_features
@@ -32,7 +39,7 @@ wandb:
     than transferring from H4/H6/H8. Compare against hchain_dag_gnn's
     zeroshot/h10_r1.60 metrics.
 trainer:
-  max_iters: 270
+  max_iters: 540          # matches hchain_dag_gnn's total rollout groups
   num_samples: 10
   batch_size: 10
   warmup_size: 10
