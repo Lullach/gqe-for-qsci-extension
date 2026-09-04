@@ -1,0 +1,17 @@
+# H10 chain, STO-3G, full valence (10e, 10o) -> 20 qubits.
+#
+# The zero-shot target of the Phase 5 hydrogen-chain experiment, and the
+# molecule the matched baseline (experiment=hchain_baseline_h10) trains on
+# directly. Bond length 1.6 A is well into the strongly correlated regime for
+# a hydrogen chain, where single-reference methods degrade and QSCI has
+# something to prove.
+_target_: gqe_qsci.molecule.PySCFMolecule
+geometry:
+  type: linear_chain
+  atoms: ['H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H', 'H']
+  bond_length: 1.6
+basis: 'sto-3g'
+nelecas: 10
+norbcas: 10
+spin: 0
+charge: 0

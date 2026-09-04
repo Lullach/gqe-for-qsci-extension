@@ -3,6 +3,7 @@ import functools
 
 import torch
 import hydra, wandb
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import WandbLogger
@@ -44,6 +45,45 @@ def get_checkpoint_path(cfg):
     print(f"Checkpoint {path} does not exist. Training from scratch.")
     return None
 
+def run_provenance(cfg):
+    """
+    (choices, setup) — what this run WAS, in a form readable at a glance.
+
+    The full resolved config already reaches wandb.config, but that is ~100
+    nested keys and nobody scans it to remember what an experiment did. These
+    two flat fields are meant to be shown as columns in the W&B runs table:
+
+      choices  which config groups were composed (experiment / model /
+               molecule_set / molecule) — the thing you actually chose
+      setup    one line with the knobs that change a result
+
+    Hydra records the composition in runtime.choices, so this stays correct
+    when configs are overridden on the command line — unlike anything written
+    by hand into the config files.
+    """
+    try:
+        choices = {k: str(v) for k, v in HydraConfig.get().runtime.choices.items()
+                   if not k.startswith("hydra/")}
+    except ValueError:      # not inside @hydra.main (e.g. imported for tests)
+        choices = {}
+
+    where = (f"molecule_set={choices['molecule_set']}"
+             if choices.get("molecule_set") not in (None, "None")
+             else f"molecule={choices.get('molecule')}")
+    setup = " | ".join([
+        f"experiment={choices.get('experiment')}",
+        f"model={choices.get('model')}",
+        where,
+        f"L={cfg.ngates}",
+        f"iters={cfg.trainer.max_iters}",
+        f"samples={cfg.trainer.num_samples}",
+        f"shots={cfg.sampler.shots}",
+        f"dmax={cfg.qsci.max_dim}",
+        f"seed={cfg.trainer.seed}",
+    ])
+    return choices, setup
+
+
 def setup_logger(cfg):
     save_dir = cfg.output
     run_id_file = os.path.join(save_dir, "run_id")
@@ -52,16 +92,23 @@ def setup_logger(cfg):
         with open(run_id_file, "r") as f:
             run_id = f.read().strip()
         print(f"Resuming training from run_id: {run_id}")
+    wandb_config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    choices, setup = run_provenance(cfg)
+    wandb_config["choices"] = choices
+    wandb_config["setup"] = setup
+    print(f"setup: {setup}")
+
     logger = WandbLogger(
         project=cfg.wandb.project,
         settings=wandb.Settings(init_timeout=300),
-        config=OmegaConf.to_container(
-                cfg, resolve=True, throw_on_missing=True
-            ),
+        config=wandb_config,
         save_dir=save_dir,
         name=cfg.wandb.name,
         group=cfg.wandb.get("group", None),
         tags=list(cfg.wandb.get("tags", [])),
+        # Free-text description of what the experiment is FOR; set it in the
+        # experiment config's wandb.notes. Shows in the W&B run overview.
+        notes=cfg.wandb.get("notes", None),
         id=run_id if run_id is not None else None,
         resume='allow'
     )

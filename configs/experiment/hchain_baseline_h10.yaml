@@ -1,0 +1,47 @@
+# @package _global_
+# CONTROL for experiment=hchain_dag_gnn: the same policy trained DIRECTLY on
+# H10, the molecule the Phase 5 experiment holds out.
+#
+# Without this, "zero-shot reached X mHa on H10" says nothing. The question is
+# how much of trained-on-H10 performance a policy that never saw H10 recovers.
+#
+# Matched on everything that affects difficulty: same model, same pool settings,
+# same ngates, same shots, same dmax, same rollout size. max_iters is 270 so
+# H10 gets the same ~270 rollout groups the 27-molecule training set delivers in
+# total (540 epochs round-robined; each training molecule sees 20, the set sees
+# 540). Two defensible choices exist here — match total gradient steps, or match
+# per-molecule groups — and this matches the former, which is the harder test
+# for zero-shot since the baseline gets every step on the target molecule.
+defaults:
+  - override /molecule: h10
+  - override /model: dag_gnn_features
+
+exp_tag: hchain-baseline-h10-s${trainer.seed}
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: hchain-h4h6h8-to-h10
+  tags: ["h-chains", "phase5", "baseline", "trained-on-h10", "dag", "featscorer"]
+  notes: >-
+    Matched baseline for the H-chain size-extrapolation experiment: the same
+    feature-based DAG GNN trained directly on H10 (20 qubits, 1.6 A) rather
+    than transferring from H4/H6/H8. Compare against hchain_dag_gnn's
+    zeroshot/h10_r1.60 metrics.
+trainer:
+  max_iters: 270
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 100
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170

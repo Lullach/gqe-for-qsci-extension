@@ -197,7 +197,7 @@ class Factory:
         Turn a molecule_set config into a list of
         (name, split, molecule_cfg, x_value).
 
-        Two forms are supported:
+        Three forms are supported:
 
         1. Bond scan (Phase 3) — one `base` linear-chain molecule plus
            train/eval bond-length lists. x_value is the bond length, so the
@@ -210,6 +210,47 @@ class Factory:
            the dissociation-curve summaries are skipped.
         """
         ms = cfg.molecule_set
+
+        if ms.get("chains") is not None:
+            # 3. Chain family (Phase 5) — the cross product of chain LENGTH and
+            #    bond length, so a training set of dozens of molecules is two
+            #    short lists rather than dozens of hand-written geometry blocks.
+            #    Chain length varies the qubit count, bond length varies the
+            #    correlation strength, and holding out the longest chain makes
+            #    the eval a size EXTRAPOLATION rather than a swap.
+            base = ms.base
+            atom = str(ms.get("atom", "H"))
+            entries = []
+            for c in ms.chains:
+                n = int(c.n_atoms)
+                split = c.get("split", "train")
+                assert split in ("train", "eval"), (
+                    f"chain of {n} atoms has split='{split}', "
+                    "expected 'train' or 'eval'"
+                )
+                lengths = c.get("bond_lengths", None)
+                if lengths is None:
+                    key = ("train_bond_lengths" if split == "train"
+                           else "eval_bond_lengths")
+                    lengths = ms.get(key, []) or []
+                for r in lengths:
+                    mcfg = copy.deepcopy(base)
+                    mcfg.geometry.type = "linear_chain"
+                    mcfg.geometry.atoms = [atom] * n
+                    mcfg.geometry.bond_length = float(r)
+                    # Full valence for a hydrogen chain: n electrons in n
+                    # orbitals. Overridable per chain for other atoms.
+                    mcfg.nelecas = int(c.get("nelecas", n))
+                    mcfg.norbcas = int(c.get("norbcas", n))
+                    entries.append(
+                        (f"{atom.lower()}{n}_r{float(r):.2f}", split, mcfg, float(r))
+                    )
+            if not entries:
+                raise ValueError(
+                    "molecule_set.chains expanded to zero molecules — are the "
+                    "bond-length lists empty?"
+                )
+            return entries
 
         if ms.get("molecules") is not None:
             entries = []

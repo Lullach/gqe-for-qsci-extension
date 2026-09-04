@@ -1,0 +1,61 @@
+# Phase 5: hydrogen chains — train on H4/H6/H8, extrapolate to H10.
+#
+# The earlier cross-molecule set (LiH + H2O -> N2) trains on TWO molecules,
+# which is an anecdote rather than a training set. Here the policy sees 27
+# molecules spanning two independent axes:
+#
+#   chain length  ->  qubit count      H4  8q, H6 12q, H8 16q   (H10 20q, held out)
+#   bond length   ->  correlation      0.7 A (weak) ... 2.8 A (strongly correlated)
+#
+# H10 is never trained on and is LARGER than anything in the training set, so
+# the zero-shot number is a size EXTRAPOLATION, not a swap between comparable
+# systems. That is the claim worth making: train on 8-16 qubits, deploy on 20.
+#
+# Hydrogen chains are the standard strong-correlation benchmark family, so the
+# numbers sit next to published ones, and the family is homogeneous — the
+# orbital features really are comparable across members, which is exactly what
+# the feature scorer assumes.
+#
+# eval_bond_lengths deliberately MIXES seen and unseen geometries:
+#   1.10, 2.40  also appear in train_bond_lengths -> pure size extrapolation
+#   1.60, 3.00  do not                            -> size AND geometry unseen
+# Both are logged per molecule (x_value = bond length), so they can be read
+# apart afterwards.
+#
+# Note H4 will be close to exact: its full CI space is only 36 determinants,
+# well under qsci.max_dim, so QSCI cannot truncate it. It still rewards
+# sampling the right determinants, but expect it to saturate early — it is the
+# easy end of the curriculum, not a discriminating test.
+#
+# Select with:  python train.py molecule_set=h_chains
+atom: 'H'
+
+# Template; geometry / nelecas / norbcas are filled in per chain by
+# Factory._expand_molecule_set (full valence: n electrons in n orbitals).
+base:
+  _target_: gqe_qsci.molecule.PySCFMolecule
+  geometry:
+    type: linear_chain
+    atoms: ['H', 'H']        # placeholder, overridden per chain
+    bond_length: 1.0         # placeholder, overridden per entry
+  basis: 'sto-3g'
+  nelecas: 2                 # placeholder
+  norbcas: 2                 # placeholder
+  spin: 0
+  charge: 0
+
+chains:
+  - n_atoms: 4
+    split: train
+  - n_atoms: 6
+    split: train
+  - n_atoms: 8
+    split: train
+  - n_atoms: 10
+    split: eval              # zero-shot, and bigger than anything trained on
+
+# 3 chains x 9 lengths = 27 training molecules
+train_bond_lengths: [0.7, 0.9, 1.1, 1.3, 1.5, 1.8, 2.1, 2.4, 2.8]
+
+# H10 only
+eval_bond_lengths: [1.1, 1.6, 2.4, 3.0]

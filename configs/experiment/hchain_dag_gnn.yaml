@@ -1,0 +1,54 @@
+# @package _global_
+# PHASE 5 — size extrapolation on hydrogen chains.
+#
+# Train one feature-based policy on H4 / H6 / H8 across nine bond lengths
+# (27 molecules, 8-16 qubits), evaluate ZERO-SHOT on H10 (20 qubits), which is
+# never trained on and larger than anything in the training set.
+#
+# Compare against experiment=hchain_baseline_h10, which trains directly on H10
+# for a matched number of rollout groups. Zero-shot approaching that baseline is
+# the claim; CASCI is the ceiling.
+#
+# max_iters is set from the SET SIZE, not copied from earlier experiments:
+# molecules are round-robined, so 27 training molecules at 20 rollout groups
+# each needs 540 epochs. Reusing the 200 of the LiH/H2O experiment would give
+# each molecule 7 groups and learn nothing.
+#
+# eval_every is raised to 50 for the same reason: at 10 it would fire ~54
+# zero-shot passes over four H10 geometries — the most expensive molecule in the
+# set — and evaluation would dominate the run.
+defaults:
+  - override /molecule_set: h_chains
+  - override /model: dag_gnn_features
+
+exp_tag: hchain-dag-gnn-s${trainer.seed}
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: hchain-h4h6h8-to-h10
+  tags: ["h-chains", "phase5", "size-extrapolation", "dag", "featscorer", "zeroshot"]
+  notes: >-
+    Size extrapolation. Trains on H4/H6/H8 (8/12/16 qubits) at nine bond
+    lengths from 0.7 to 2.8 A, 27 molecules total, and evaluates zero-shot on
+    H10 (20 qubits) at 1.1/1.6/2.4/3.0 A. 1.1 and 2.4 also appear in training,
+    so those two isolate size extrapolation; 1.6 and 3.0 are unseen in both
+    size and geometry. Baseline for comparison: hchain_baseline_h10.
+trainer:
+  max_iters: 540          # 27 train molecules -> ~20 rollout groups each
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10         # must equal num_samples (one molecule per group)
+  step_per_epoch: 30
+  load_checkpoint: false  # multi-molecule resume is not supported
+  checkpoint_every_n_iters: 100
+  eval_every: 50          # ~11 zero-shot passes, not ~54
+  precision: 32-true
+sampler:
+  shots: 1_000
+qsci:
+  max_dim: 170
