@@ -149,6 +149,33 @@ class ExcitationRules:
             dtype=torch.bool, device=self.device,
         )
 
+    # Tensor attributes, listed once so to() cannot silently miss one.
+    _TENSORS = ("occ", "spin", "virt", "idx", "n_virt_spin",
+                "has_virt_after", "has_occ_after", "double_ok")
+
+    def to(self, device):
+        """
+        Move the precomputed mask tables to `device`, in place.
+
+        This class is deliberately NOT an nn.Module (it holds no learnable
+        state), which means `policy.to(device)` does not reach it — the tensors
+        would stay wherever they were built. Lightning constructs the policy on
+        CPU and moves it to the GPU afterwards, so without this the masks stay
+        on CPU and masked_fill raises
+
+            RuntimeError: expected self and mask to be on the same device
+
+        Callers should invoke it at the start of a rollout; it is a no-op once
+        the tables are already in the right place.
+        """
+        device = torch.device(device)
+        if self.device == device:
+            return self
+        for name in self._TENSORS:
+            setattr(self, name, getattr(self, name).to(device))
+        self.device = device
+        return self
+
     # -- helpers ------------------------------------------------------------
 
     def _n_beta(self, i, j):

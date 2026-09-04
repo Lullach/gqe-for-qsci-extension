@@ -208,6 +208,11 @@ class PointerDAGGNNPolicy(Policy):
         forced : (B, L, 4) long to replay stored gates, else None to sample.
         Returns picks (B, L, 4), logp (B, L), entropy (B, L) or None.
         """
+        # The mask tables are not nn.Module state, so policy.to(device) does not
+        # reach them — Lightning builds the policy on CPU and moves it to the
+        # GPU afterwards. No-op once they are already there.
+        self.rules.to(self.orb_feats.device)
+
         orb_keys = self.encoder(self.orb_feats, self.pair_feats)
         frontier, edge_srcs, edge_dsts = self._init_dag_state(batch, device)
 
