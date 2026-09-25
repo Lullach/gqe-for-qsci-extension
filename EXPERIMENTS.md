@@ -167,6 +167,61 @@ singularity exec ~/images/cudaq_sandbox python3 hpc/analyze_xmol.py
 `analyze_xmol.py` prints the zero-shot and baseline errors against N2's CASCI
 in mHa, mean +/- sd across seeds, and the generalization gap between them.
 
+## Phase 5 — hydrogen chains: H4/H6/H8 -> zero-shot H10 (ABCI-Q)
+
+`coverage: 0.05`, `shots: 10_000`, 540 rollout groups, **5 seeds**.
+
+### Conventions adopted here
+
+**Five seeds, always.** Every earlier result was single-seed, which is the
+stated reason previous comparisons were inconclusive. Seeds are the fixed set
+1-5 (not five arbitrary runs) so results are reproducible. Submit as a PBS job
+array -- `train.sh` reads `PBS_ARRAY_INDEX` into `trainer.seed`, and because
+`exp_tag` ends in `-s${trainer.seed}` each element gets its own output directory
+and W&B run:
+
+```bash
+qsub -J 1-5 -W group_list=$ABCIQ_GROUP -l walltime=... -v EXPERIMENT=... hpc/jobs/train.sh
+```
+
+**Subspace cap scales with the molecule.** `qsci.coverage` sets `max_dim` to a
+fraction of each molecule's CI space instead of a flat number. A flat 170 gave
+H4 100% coverage and H10 0.27%, so the H10 error was subspace truncation rather
+than circuit quality -- and the reward meant something different on every
+molecule, which is fatal for a transfer experiment. See
+`Factory._resolve_max_dim`.
+
+**10k shots, not the paper's 1k.** With 1000 shots an N2 circuit sampled 31
+distinct determinants, so the raw subspace was sampling-limited. Raising the cap
+alone only lets classical refinement fill more of it.
+
+### Run
+
+Smoke first -- a 3,175-dimensional diagonalisation per circuit is a new cost
+regime, so get a timing number before committing to 540 epochs:
+
+```bash
+qsub -W group_list=$ABCIQ_GROUP -l walltime=2:00:00 -v EXPERIMENT=hchain_dag_gnn,EXTRA="trainer.max_iters=2 trainer.num_samples=2 trainer.batch_size=2 trainer.warmup_size=2 trainer.buffer_size=2 trainer.step_per_epoch=1 trainer.eval_every=1 exp_tag=hchain-smoke-cov" hpc/jobs/train.sh
+```
+
+Then both arms, five seeds each, as two job arrays:
+
+```bash
+qsub -J 1-5 -W group_list=$ABCIQ_GROUP -l walltime=12:00:00 -v EXPERIMENT=hchain_dag_gnn hpc/jobs/train.sh
+qsub -J 1-5 -W group_list=$ABCIQ_GROUP -l walltime=12:00:00 -v EXPERIMENT=hchain_baseline_h10 hpc/jobs/train.sh
+```
+
+Sync and analyse:
+
+```bash
+singularity exec ~/images/cudaq_sandbox wandb sync ~/gqe-for-qsci/outputs/gqe-for-qsci/hchain-*/wandb/offline-run-*
+singularity exec ~/images/cudaq_sandbox python3 hpc/analyze_xmol.py --group hchain-h4h6h8-to-h10
+```
+
+`analyze_xmol.py` drops probe runs below `--min-iters` (default 10) and reports
+zero-shot per held-out geometry, since H10 is evaluated at four bond lengths of
+differing difficulty.
+
 ## Docker on Windows
 
 CUDA-Q 0.12.0 is not available as a native Windows Python package, so the

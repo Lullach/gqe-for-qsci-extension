@@ -32,6 +32,22 @@ SIF="${SIF:-$HOME/images/cudaq_sandbox}"
 EXPERIMENT="${EXPERIMENT:?set EXPERIMENT, e.g. qsub -v EXPERIMENT=n2_bond_scan_dag_gnn hpc/jobs/train.sh}"
 EXTRA="${EXTRA:-}"
 
+# Seed sweeps run as a PBS job array, so five seeds is one submit:
+#     qsub -J 1-5 -W group_list=$ABCIQ_GROUP -v EXPERIMENT=... hpc/jobs/train.sh
+# Each element gets trainer.seed=$PBS_ARRAY_INDEX, and since exp_tag ends in
+# -s${trainer.seed} each also gets its own output directory and W&B run.
+# Skipped when EXTRA already pins a seed — Hydra errors on a duplicated
+# override rather than letting the last one win, so this must not double up.
+SEED_ARG=""
+if [ -n "${PBS_ARRAY_INDEX:-}" ]; then
+    case "$EXTRA" in
+        *trainer.seed=*)
+            echo "note: EXTRA pins trainer.seed, ignoring PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX}" ;;
+        *)
+            SEED_ARG="trainer.seed=${PBS_ARRAY_INDEX}" ;;
+    esac
+fi
+
 echo "=================================================="
 echo "job id     : ${PBS_JOBID:-<none>}"
 echo "node       : $(hostname)"
@@ -71,7 +87,7 @@ singularity exec --nv \
     --env HYDRA_FULL_ERROR="${HYDRA_FULL_ERROR:-1}" \
     --workdir /workspace \
     "$SIF" \
-    python3 /workspace/train.py experiment="$EXPERIMENT" $EXTRA
+    python3 /workspace/train.py experiment="$EXPERIMENT" $SEED_ARG $EXTRA
 
 echo
 echo "=== training finished ==="

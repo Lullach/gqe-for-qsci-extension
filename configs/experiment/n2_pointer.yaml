@@ -45,6 +45,11 @@ trainer:
   checkpoint_every_n_iters: 50
   precision: 32-true
 sampler:
-  shots: 1_000
+  # 10k, not the paper's 1k. With 1000 shots an N2 circuit sampled only 31
+  # DISTINCT determinants (num_sampled_basis), so the raw QSCI subspace was
+  # sampling-limited rather than cap-limited — raising qsci.coverage alone
+  # would only let classical refinement fill more of it, not improve the
+  # circuit's own energy. Shots have to scale with the CI space too.
+  shots: 10_000
 qsci:
   max_dim: 170
