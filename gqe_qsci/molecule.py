@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from math import comb
 from pyscf import gto, scf, mcscf, ao2mo, cc, lib
 
 
@@ -57,6 +58,22 @@ class PySCFMolecule:
   def active_mo_occ(self):
     """Hartree-Fock occupations (2.0 / 0.0) of the active-space orbitals, shape (norb,)."""
     return np.asarray(self.hf.mo_occ)[self.active_indices]
+
+  @property
+  def n_determinants(self) -> int:
+    """
+    Size of the full CI space of this active space: C(norb, nalpha) * C(norb, nbeta).
+
+    This is the denominator QSCI's `max_dim` should be read against. A fixed
+    max_dim means wildly different coverage across molecules — 170 determinants
+    is the entire space for H4 (36) but 0.27% of H10's (63,504) — so the reward
+    stops meaning the same thing on each molecule, which undermines any
+    cross-molecule comparison. See Factory._resolve_max_dim and NOTES.md.
+    """
+    nalpha, nbeta = self.nelec
+    # math.comb is exact integer arithmetic; it takes no `exact=` keyword
+    # (that is scipy.special.comb's signature).
+    return comb(self.norb, nalpha) * comb(self.norb, nbeta)
   
   def _build_geometry(self, geometry):
     if geometry.type == 'linear_chain':

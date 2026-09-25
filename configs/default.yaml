@@ -36,7 +36,19 @@ operator_pool:
   dedup_excitations: false
 
 qsci:
+  # Absolute subspace cap. With coverage: null this is used for every molecule;
+  # with coverage set it becomes the ceiling, so a large active space cannot
+  # demand an intractable diagonalisation.
   max_dim: 2000
+  # Target fraction of each molecule's full CI space, C(norb,na)*C(norb,nb).
+  # null = flat max_dim everywhere (the original behaviour). Set it — 0.05 is a
+  # sensible starting point — for cross-molecule work, where a flat cap makes
+  # the reward mean different things on molecules of different size: at
+  # max_dim=170, coverage runs from 100% on H4 to 0.27% on H10. See
+  # Factory._resolve_max_dim.
+  coverage: null
+  # Floor, so tiny active spaces still get a usable subspace.
+  min_dim: 50
   enlarge_method: "symmetry_completion"
   max_cycle: 1000
   eigsh_kwargs: {"tol": 1e-14, "maxiter": 5000}

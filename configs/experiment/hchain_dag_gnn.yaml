@@ -51,4 +51,12 @@ trainer:
 sampler:
   shots: 1_000
 qsci:
-  max_dim: 170
+  # Scale the subspace with system size instead of a flat cap. A flat 170
+  # covered 100% of H4's CI space and 0.27% of H10's, so the energy error on
+  # the held-out molecule was dominated by subspace truncation rather than by
+  # circuit quality, and the reward meant something different on every
+  # molecule. 5% gives H8 and H10 comparable coverage; H4/H6 fall back to
+  # min_dim because 5% of their tiny spaces is a handful of determinants.
+  coverage: 0.05
+  max_dim: 4000     # ceiling, so H10 cannot demand an intractable diagonalisation
+  min_dim: 50

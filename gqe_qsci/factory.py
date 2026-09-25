@@ -164,13 +164,59 @@ class Factory:
             case _:
                 raise ValueError(f"Unknown operator pool specification: {cfg.operator_pool.spec}")
 
+    @staticmethod
+    def _resolve_max_dim(cfg, molecule) -> int:
+        """
+        The QSCI subspace cap for THIS molecule.
+
+        `qsci.coverage` (a fraction of the molecule's full CI space) makes the cap
+        scale with system size:
+
+            dim = clip(round(coverage * n_determinants), qsci.min_dim, qsci.max_dim)
+
+        Why this matters for transfer: a single global max_dim means the reward
+        measures something different on every molecule. At max_dim=170, coverage
+        runs from 100% on H4 (36 determinants) to 0.27% on H10 (63,504) — a 400x
+        spread — so the held-out molecule sits in a truncation regime the policy
+        never trained in, and the energy error is dominated by subspace
+        truncation rather than by circuit quality. A fixed FRACTION keeps the
+        reward comparable, which is what a cross-molecule policy needs.
+
+        `coverage: null` (the default) keeps the old behaviour exactly: the flat
+        `qsci.max_dim` for every molecule. `max_dim` still acts as the absolute
+        ceiling when coverage is set, so a large molecule cannot demand an
+        intractable diagonalisation.
+        """
+        max_dim = int(cfg.qsci.max_dim)
+        coverage = cfg.qsci.get("coverage", None)
+        if coverage is None:
+            return max_dim
+
+        coverage = float(coverage)
+        assert 0.0 < coverage <= 1.0, (
+            f"qsci.coverage must be in (0, 1], got {coverage}"
+        )
+        min_dim = int(cfg.qsci.get("min_dim", 50))
+        n_det = molecule.n_determinants
+        dim = int(round(coverage * n_det))
+        # Also clamp to the CI space itself: a cap above n_det is harmless (it
+        # simply never binds) but would log a nonsensical ">100% coverage" for
+        # tiny active spaces, where min_dim exceeds the whole space.
+        resolved = min(max(min_dim, min(dim, max_dim)), n_det)
+        _log.info(
+            "QSCI subspace: %d of %d determinants (%.2f%% of the CI space; "
+            "coverage=%.3f, min_dim=%d, max_dim=%d)",
+            resolved, n_det, 100.0 * resolved / n_det, coverage, min_dim, max_dim,
+        )
+        return resolved
+
     def _make_qsci_pipeline(self, cfg, molecule, operator_pool):
         """Build a QSCI pipeline for a given molecule + pool (no caching)."""
         numQPUs = cudaq.get_target().num_qpus()
         sampler = Sampler(operator_pool, mpi=cfg.sampler.mpi, numQPUs=numQPUs, shots_count=cfg.sampler.shots)
         return QSCIPipeline(
             molecule, operator_pool, sampler,
-            max_dim=cfg.qsci.max_dim,
+            max_dim=self._resolve_max_dim(cfg, molecule),
             enlarge_method=cfg.qsci.enlarge_method,
             max_cycle=cfg.qsci.max_cycle,
             eigsh_kwargs=cfg.qsci.eigsh_kwargs,
