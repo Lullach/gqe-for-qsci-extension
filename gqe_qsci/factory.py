@@ -144,6 +144,7 @@ class Factory:
     def _make_pool(self, cfg, molecule):
         """Build an operator pool for a given molecule (no caching)."""
         dedup = cfg.operator_pool.get("dedup_excitations", False)
+        screening = cfg.operator_pool.get("ccsd_screening", True)
         match cfg.operator_pool.spec:
             case "pauli_evolution":
                 return PauliEvolutionPool(
@@ -153,6 +154,7 @@ class Factory:
                     remove_z_ladder=cfg.operator_pool.remove_z_ladder,
                     only_use_first_pauli=cfg.operator_pool.only_use_first_pauli,
                     dedup_excitations=dedup,
+                    ccsd_screening=screening,
                 )
             case "excitation":
                 return ExcitationPool(
@@ -160,6 +162,7 @@ class Factory:
                     params=cfg.operator_pool.params,
                     threshold=cfg.operator_pool.ccsd_threshold,
                     dedup_excitations=dedup,
+                    ccsd_screening=screening,
                 )
             case _:
                 raise ValueError(f"Unknown operator pool specification: {cfg.operator_pool.spec}")

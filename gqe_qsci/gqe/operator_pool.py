@@ -515,23 +515,39 @@ class PauliEvolutionPool(UCCSDBasedPool):
         remove_z_ladder: bool = False,
         only_use_first_pauli: bool = False,
         dedup_excitations: bool = False,
+        ccsd_screening: bool = True,
     ):
         super().__init__(
             molecule, params, threshold=threshold,
             remove_z_ladder=remove_z_ladder,
             only_use_first_pauli=only_use_first_pauli,
             dedup_excitations=dedup_excitations,
+            ccsd_screening=ccsd_screening,
         )
 
     def get_vocab_size(self):
         return len(self.pool)
 
-    def build_operator_pool(self, threshold, remove_z_ladder=False, only_use_first_pauli=False, dedup_excitations=False):
+    def build_operator_pool(self, threshold, remove_z_ladder=False, only_use_first_pauli=False, dedup_excitations=False, ccsd_screening=True):
         # Remembered so make_excitation_operator() can reproduce the same
         # treatment for gates the pointer policy builds later (a pointer gate
         # must cost the same as a pool gate for the comparison to be clean).
         self._remove_z_ladder = bool(remove_z_ladder)
         self._only_use_first_pauli = bool(only_use_first_pauli)
+
+        if not ccsd_screening:
+            # Start empty (identity only) and let the policy grow the pool via
+            # ensure_excitation(). This is the ONLY place CCSD enters as an
+            # INPUT to the method: make_uccsd_ansatz -> generate_excitations
+            # reads molecule.ccsd_amplitude to decide pool membership, and one
+            # feature column is a CCSD t-amplitude. Skipping it is what makes
+            # "no CCSD in the loop" true for the pointer action space, which
+            # never reads the menu anyway.
+            #
+            # R-CCSD in reference_keys is unaffected and is fine to keep: that
+            # is a logged COMPARISON energy, like R-CASCI, not an input.
+            self._pool_amplitudes = [0.0]
+            return [self.get_identity_operator()]
 
         uccsd_ansatz = self.make_uccsd_ansatz(
             threshold=threshold, dedup_excitations=dedup_excitations
@@ -591,6 +607,7 @@ class ExcitationPool(UCCSDBasedPool):
         params: list[float] | None,
         threshold: float =1e-8,
         dedup_excitations: bool = False,
+        ccsd_screening: bool = True,
     ):
         # NOTE: previously called super().__init__(molecule, params), silently
         # dropping `threshold` and falling back to the 1e-8 default — so the
@@ -598,12 +615,17 @@ class ExcitationPool(UCCSDBasedPool):
         super().__init__(
             molecule, params, threshold=threshold,
             dedup_excitations=dedup_excitations,
+            ccsd_screening=ccsd_screening,
         )
 
     def get_vocab_size(self):
         return len(self.pool)
 
-    def build_operator_pool(self, threshold, dedup_excitations=False):
+    def build_operator_pool(self, threshold, dedup_excitations=False, ccsd_screening=True):
+        if not ccsd_screening:      # see PauliEvolutionPool for the rationale
+            self._pool_amplitudes = [0.0]
+            return [self.get_identity_operator()]
+
         uccsd_ansatz = self.make_uccsd_ansatz(
             threshold=threshold, dedup_excitations=dedup_excitations
         )

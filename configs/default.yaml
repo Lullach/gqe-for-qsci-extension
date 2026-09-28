@@ -34,6 +34,13 @@ operator_pool:
   # contributes a DIFFERENT Pauli fragment to the pool. Shrinks V.
   # Default false = current behaviour. See NOTES.md, "Pool redundancy".
   dedup_excitations: false
+  # Build the pool by screening CCSD amplitudes (the original behaviour). This is
+  # the ONLY place CCSD enters as an INPUT to the method — it decides pool
+  # membership, and one feature column is a CCSD t-amplitude. false starts the
+  # pool empty (identity only) for policies that construct their own operators,
+  # i.e. the pointer action space. R-CCSD in reference_keys is unrelated: that is
+  # a logged comparison energy, like R-CASCI, and stays either way.
+  ccsd_screening: true
 
 qsci:
   # Absolute subspace cap. With coverage: null this is used for every molecule;

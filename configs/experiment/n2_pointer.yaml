@@ -24,6 +24,11 @@ exp_tag: n2-pointer-s${trainer.seed}
 ngates: 10
 operator_pool:
   dedup_excitations: true
+  # No CCSD. The pointer policy never reads the pool as a menu — it builds each
+  # excitation from orbital pointers and asks the pool to materialise it — so
+  # screening one by CCSD would pay for a classical calculation whose result is
+  # then discarded, and would leave "no CCSD in the loop" false end to end.
+  ccsd_screening: false
 wandb:
   project: ${project.name}
   name: ${exp_tag}

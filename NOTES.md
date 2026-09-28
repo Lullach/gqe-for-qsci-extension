@@ -397,6 +397,9 @@ every other), which is expensive on real hardware. Sparse-SYK approximations
 
 ## Trajectory log-prob (DDPO) replaces the ELBO — IMPLEMENTED
 
+*A worked numerical trace of this (and of the DAG GNN) through one full epoch is
+in `docs/TRAINING_WALKTHROUGH.md`.*
+
 **What changed.** `CircuitDiffusionModelAbsorbing` and
 `CircuitGNNModelAbsorbing` previously scored circuits with a denoising ELBO
 averaged over all T timesteps, using corruption masks pre-sampled by
@@ -1944,25 +1947,33 @@ from four pointers into the orbital table instead of indexing a CCSD-screened
 pool. Three choices were made to get a first run going, and each is a deliberate
 placeholder rather than a settled answer.
 
-### 1. `only_use_first_pauli` — currently ON, and probably shouldn't stay
+### 1. `only_use_first_pauli` — ON, and there are THREE regimes, not two
 
-A pool entry under `only_use_first_pauli: true` is ONE Pauli string of an
-excitation generator, not the whole generator. `make_excitation_operator()`
-mirrors that, so a pointer gate costs exactly what a pool gate costs and the
-first comparison isolates the action space — the only difference between the two
-runs is that the pointer can reach all 315 N2 excitations instead of the 117
-CCSD kept.
+CORRECTION (2026-09-28): an earlier version of this note claimed that
+`only_use_first_pauli: false` gives a full excitation generator per gate and that
+the ablation therefore needs L reduced to match compiled gate counts. That is
+wrong. Read `build_operator_pool`: every Pauli string is appended as its OWN pool
+entry, and the flag merely `break`s after the first. The flag changes the SIZE OF
+THE VOCABULARY, not the depth of a gate.
 
-But it is a strange convention on its own terms: applying one Pauli fragment of
-exp(t (T - T^dag)) is not applying the excitation. It was presumably adopted to
-keep gate counts down. Once the matched comparison is done, run the ablation:
+| regime | config | one action is | depth per gate | V (N2) |
+|---|---|---|---|---|
+| 1 (current) | `pauli_evolution` + `only_use_first_pauli: true` | one Pauli fragment | 1 rotation | 118 |
+| 2 | `pauli_evolution` + `only_use_first_pauli: false` | one Pauli fragment | 1 rotation | larger |
+| 3 | `spec: excitation` | the whole generator | ~8 rotations | ~#excitations |
 
-    only_use_first_pauli: true   (matched, current)
-    only_use_first_pauli: false  (full generator per gate)
+**1 vs 2 is a pure config flip** — identical gate depth, the policy simply gains
+access to the other Pauli fragments of each excitation. Fair at fixed L, no
+gate-count matching, no code. Cheap and worth running.
 
-with L reduced for the second so the COMPILED gate counts match rather than L.
-If the full generator wins, the fragment convention should be retired for both
-the pool and the pointer, and the earlier pool results re-read in that light.
+**1 (or 2) vs 3** is the comparison that does need matching by COMPILED gate
+count rather than by L, because regime 3's gates really are ~8x deeper.
+
+It remains a strange convention on its own terms: applying one Pauli fragment of
+exp(t(T - T^dag)) is not applying the excitation. The pointer policy's
+`make_excitation_operator` deliberately mirrors regime 1 so that a pointer gate
+costs exactly what a pool gate costs and the first comparison isolates the action
+space.
 
 ### 2. Single excitations get an arbitrary angle
 
@@ -1979,15 +1990,26 @@ Options, in order of how defensible they are:
   - keep CCSD t1 just for singles. Cheap, but reintroduces the dependence the
     whole design is trying to remove, so only as a diagnostic.
 
-### 3. CCSD still runs, even though the pointer never uses it
+### 3. CCSD as an input — RESOLVED for the pointer (2026-09-28)
 
-`create_molecule_bundles()` builds a pool for every molecule, and that calls
-CCSD. The pointer policy ignores the resulting menu — it only reads
-`get_orbital_features()` and `cas_hamiltonian.h2` — but the cost is still paid
-and the claim "no CCSD in the loop" is not yet TRUE end to end. Removing it means
-a bundle variant that skips `build_operator_pool`, which is easy but touches the
-factory and every model that expects `operator_features`. Do it before making the
-no-CCSD claim in writing.
+CCSD appeared in two places, and only one of them mattered:
+
+  - `operator_pool.py`, `generate_excitations` — CCSD as an **input**: it decides
+    pool membership and supplies the `amplitude` feature column. This is the one
+    that made "no CCSD in the loop" false.
+  - `factory.py` / `train_pipeline.py` `compute_ccsd()` — CCSD as a **logged
+    reference energy** (`R-CCSD`), exactly like `R-CASCI`. This does NOT
+    undermine the claim and is worth keeping: it is a comparison on the plots,
+    not an input to the method.
+
+`operator_pool.ccsd_screening: false` now starts the pool empty (identity only)
+and lets the policy grow it through `ensure_excitation`. `n2_pointer` sets it.
+The pointer policy reads only `get_orbital_features()` and `cas_hamiltonian.h2`,
+both of which are Hartree-Fock quantities, so with this flag the pointer
+experiment is CCSD-free end to end.
+
+Note the flag is meaningless for pool-based policies: they need the menu, so
+leaving it at the default `true` is correct for every other experiment.
 
 ### Also worth knowing
 
