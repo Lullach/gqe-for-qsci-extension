@@ -167,6 +167,8 @@ An **entropy regularization** bonus (coefficient `entropy_coeff`, default 0.01) 
 
 Default clipping range: `clip_grpo_low=0.2`, `clip_grpo_high=0.28` (asymmetric to allow larger improvements than penalties).
 
+For a step-by-step trace of one full epoch — rollout, trajectory log-prob, GRPO loss, and how the importance ratio fans out over the 30 gradient steps — with small readable tensors for both the absorbing diffusion and DAG GNN policies, see [`docs/TRAINING_WALKTHROUGH.md`](docs/TRAINING_WALKTHROUGH.md).
+
 ### Temperature Scheduling
 
 **Theory.** Sampling temperature $T$ controls exploration vs. exploitation in the policy: high $T$ flattens the distribution (explore), low $T$ sharpens it (exploit). Every scheduler and every model in this codebase actually tracks and consumes the **inverse temperature** $\beta = 1/T$: sampling is always $\pi(a) \propto \exp(-\beta \cdot \text{logits}(a))$ (the standard Boltzmann form), so **increasing $\beta$ sharpens** the policy (more exploitation) and **decreasing $\beta$ flattens** it (more exploration) — the opposite of what "increasing temperature" would mean if $T$ itself were the tracked quantity. This is worth stating explicitly because the codebase previously mixed the two up (see `gqe_qsci/gqe/scheduler.py` for the full naming-convention note).
