@@ -92,20 +92,28 @@ def buffer_collate_fn(batch):
 
     If all are None   → collated["reveal_step"] = None
     If all are tensors → collated["reveal_step"] = stacked (B, L) tensor
-    Mixed (shouldn't happen in practice) → None entries filled with zeros.
+    Mixed is a bug (a buffer holding rollouts from more than one model type)
+    and raises instead of being papered over with zero-filled trajectories,
+    which would silently score those samples against a wrong path.
     """
     rs_list = [item["reveal_step"] for item in batch]
     rest = [{k: v for k, v in item.items() if k != "reveal_step"} for item in batch]
     collated = default_collate(rest)
 
-    if all(r is None for r in rs_list):
+    n_none = sum(r is None for r in rs_list)
+    if n_none not in (0, len(rs_list)):
+        # Deliberately a raise, not an assert: this guards correctness, and
+        # asserts are stripped under `python -O`.
+        raise ValueError(
+            f"buffer_collate_fn: mixed reveal_step in batch "
+            f"({n_none}/{len(rs_list)} are None). A replay buffer must hold "
+            f"rollouts from a single model type - absorbing-diffusion samples "
+            f"carry a trajectory, GPT-2 / single-shot / DAG GNN samples do not."
+        )
+
+    if n_none:
         collated["reveal_step"] = None
     else:
-        ref = next(r for r in rs_list if r is not None)
-        filled = [
-            r if r is not None else torch.zeros_like(ref)
-            for r in rs_list
-        ]
-        collated["reveal_step"] = torch.stack(filled, dim=0)
+        collated["reveal_step"] = torch.stack(rs_list, dim=0)
 
     return collated

@@ -79,3 +79,7 @@ hpc/env.local.sh
 *.e[0-9]*
 #   container build logs written next to the def file
 hpc/*.log
+
+# Local scratch notes of submitted PBS job IDs. Useful, but personal
+# bookkeeping rather than part of the project.
+hpc/jobsNames etc
