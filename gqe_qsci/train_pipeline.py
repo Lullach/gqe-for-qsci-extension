@@ -15,7 +15,6 @@ import os
 
 import torch
 import numpy as np
-import wandb
 from torch.utils.data import DataLoader
 import random
 import pytorch_lightning as pl
@@ -24,6 +23,7 @@ _log = logging.getLogger(__name__)
 
 from gqe_qsci.gqe.buffer import ReplayBuffer, BufferDataset, buffer_collate_fn
 from gqe_qsci.gqe.models.operator_scorer import OperatorScorer
+from gqe_qsci.results_log import ResultsWriter
 from gqe_qsci.qsci.schema import QSCISampleResult
 from gqe_qsci.qsci.pipeline import as_scivector
 from gqe_qsci.wandb_logger import Logger
@@ -61,6 +61,7 @@ class TrainPipeline(pl.LightningModule):
         self.model = self.factory.create_model(self.config)
         self.metric_logger = self.factory.create_wandb_logger(self.config)
         self.current_bundle = None
+        self.results_writer = self._make_results_writer()
 
     def _init_multi_molecule(self):
         """
@@ -118,6 +119,7 @@ class TrainPipeline(pl.LightningModule):
         self._refs: dict[str, dict] = {}     # molecule name -> reference energies
         self.metric_logger = Logger(reference_energies=None)
         self.current_bundle = None
+        self.results_writer = self._make_results_writer()
         self._rr = 0                         # round-robin pointer over train set
         _log.info(
             "Multi-molecule: %d train, %d eval; feature stats frozen over %d "
@@ -175,6 +177,16 @@ class TrainPipeline(pl.LightningModule):
     @property
     def _tracker_key(self) -> str:
         return self.current_bundle.name if self.multi_molecule else "_single_"
+
+    def _make_results_writer(self) -> ResultsWriter:
+        """Per-circuit CSV beside the run. See results_log.py for why."""
+        target = getattr(self.config.model, "_target_", "") or ""
+        return ResultsWriter(
+            os.path.join(self.config.output, "results.csv"),
+            exp_tag=str(self.config.exp_tag),
+            model=target.rsplit(".", 1)[-1] or "unknown",
+            seed=int(self.config.trainer.seed),
+        )
 
     @property
     def _metric_prefix(self) -> str:
@@ -261,6 +273,13 @@ class TrainPipeline(pl.LightningModule):
         if best["global"] is not None:
             log_inputs.append({"result": best["global"], "prefix": f"{p}Global-refined(best_so_far)"})
         self.metric_logger.log_result(self, log_inputs)
+        self.results_writer.log(
+            epoch=self.current_epoch,
+            molecule=(self.current_bundle.name if self.multi_molecule else "target"),
+            split="train",
+            entries=[{**e, "stage": e["prefix"][len(p):]} for e in log_inputs],
+            references=self.metric_logger.reference_energies,
+        )
         super().on_train_epoch_start()
     
     def on_train_epoch_end(self):
@@ -316,6 +335,13 @@ class TrainPipeline(pl.LightningModule):
                     {"result": best["global"], "prefix": f"{p}Global-refined(best_so_far)"}
                 )
             self.metric_logger.log_result(self, log_inputs)   # refs already the eval molecule's
+            self.results_writer.log(
+                epoch=self.current_epoch,
+                molecule=bundle.name,
+                split="eval",
+                entries=[{**e, "stage": e["prefix"][len(p):]} for e in log_inputs],
+                references=self.metric_logger.reference_energies,
+            )
         if was_training:
             self.model.train()
 
@@ -364,53 +390,15 @@ class TrainPipeline(pl.LightningModule):
         # Everything logged in ONE run.log so it lands on a single step with epoch.
         payload = {"epoch": int(self.current_epoch)}
 
-        # --- per-molecule SCATTER charts -----------------------------------
-        # Scatter (not line_series): plots points only — no misleading linear
-        # interpolation between the 7 irregular bond lengths — and auto-scales
-        # the y-axis to the data (line_series forces the y-domain toward 0,
-        # which squashed the near -107 Ha energies flat). Toggle a panel's
-        # y-axis to log scale in the UI to inspect sub-mHa detail.
-        def scatter(col, fn, title):
-            t = wandb.Table(columns=["bond_length", col])
-            for r in rows:
-                y = fn(r)
-                if y is not None:
-                    t.add_data(r["x"], y)
-            return wandb.plot.scatter(t, "bond_length", col, title=title)
-
-        # No absolute-energy chart: wandb custom charts force the y-axis to
-        # include 0, squashing the near -107.5 Ha energies flat, and the absolute
-        # offset is chemically irrelevant anyway. The error-vs-reference scatters
-        # below carry the signal on a natural scale; absolute energies remain in
-        # summary/energy_table for anyone who wants them.
-        payload["summary/err_vs_CASCI_mHa"] = scatter(
-            "policy_minus_CASCI_mHa",
-            lambda r: (r["energy"] - r["casci"]) * 1000.0 if r["casci"] is not None else None,
-            "policy - CASCI per bond length (mHa; chemical accuracy = 1.6)")
-        payload["summary/err_vs_CCSD_mHa"] = scatter(
-            "policy_minus_CCSD_mHa",
-            lambda r: (r["energy"] - r["ccsd"]) * 1000.0 if r["ccsd"] is not None else None,
-            "policy - CCSD per bond length (mHa; below 0 beats CCSD)")
-        if any(r["subspace_dim"] is not None for r in rows):
-            payload["summary/subspace_dim_vs_bond"] = scatter(
-                "subspace_dim", lambda r: r["subspace_dim"],
-                "QSCI subspace dim vs bond length")
-
-        # --- full table: for custom UI panels (colour by split, reference
-        #     line at 1.6 mHa, references overlaid, etc.) --------------------
-        table = wandb.Table(columns=[
-            "bond_length", "split", "policy_energy", "R-CASCI", "R-CCSD",
-            "policy - CASCI (mHa)", "policy - CCSD (mHa)", "abs err CASCI (mHa)",
-            "subspace_dim",
-        ])
-        for r in rows:
-            table.add_data(
-                r["x"], r["split"], r["energy"], r["casci"], r["ccsd"],
-                (r["energy"] - r["casci"]) * 1000.0 if r["casci"] is not None else None,
-                (r["energy"] - r["ccsd"]) * 1000.0 if r["ccsd"] is not None else None,
-                err_mha(r), r["subspace_dim"],
-            )
-        payload["summary/energy_table"] = table
+        # --- NO pre-rendered charts here ------------------------------------
+        # This used to push wandb.plot.scatter panels and a wandb.Table. Those
+        # become FIXED panels: they cannot be re-cut, re-axed or filtered, and
+        # with 25 runs in an architecture comparison they bury the workspace.
+        # The same rows now go to <output>/results.csv (results_log.py), one per
+        # evaluated circuit rather than one per molecule, so any figure can be
+        # made afterwards from richer data without resubmitting a job. See
+        # hpc/plot_results.py. Only scalars go to W&B, which is what it is
+        # actually good at: overlaying curves across runs.
 
         # --- scalar headline metrics (plain wandb line charts, x=epoch; these
         #     DO overlay across runs in the workspace — the model comparison) --
