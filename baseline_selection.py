@@ -91,9 +91,12 @@ def main():
     print(f">>> HCI reaches {mha(largest[1]):.3f} mHa vs FCI at "
           f"{largest[0]} determinants "
           f"({100.0 * largest[0] / fci_dim:.2f}% of the CI space).")
-    print(">>> That is the FLOOR for a QSCI run capped at that subspace size.")
-    print(">>> Far above it -> the POLICY is the limit. Close to it -> the CAP is,")
-    print(">>> and raising qsci.coverage is what will help.")
+    print(">>> HCI is a strong HEURISTIC reference, not a bound: it is greedy and")
+    print(">>> its criterion is first-order PT. The real bound is the oracle (top-N")
+    print(">>> by |c| from the exact FCI vector), which is not measured here.")
+    print(">>> QSCI far above HCI -> the policy is selecting poorly. Close to or")
+    print(">>> below it -> the quantum sampling is competitive with classical")
+    print(">>> selection, which is the value-proposition claim.")
 
     out_dir = cfg.get("output", "outputs")
     os.makedirs(out_dir, exist_ok=True)

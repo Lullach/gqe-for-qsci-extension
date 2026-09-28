@@ -2016,14 +2016,31 @@ Heat-bath CI on H10 at 1.6 A, error vs FCI:
 | 18,526 | 4.4 mHa | 29.2% |
 | 27,310 | 0.7 mHa | 43.0% |
 
-**Chemical accuracy (1.6 mHa) needs ~20,000-30,000 determinants, i.e. 30-50% of
-the full CI space.** No selected-CI method — quantum-sampled or classical —
-reaches it at a sensible cap on this system. So "did we reach chemical accuracy"
-is the wrong question on a strongly correlated chain: a method that needs half of
-FCI has argued itself out of a job, and the cost explodes for nothing.
+**HCI needs ~20,000-30,000 determinants — 30-50% of the full CI space — to reach
+chemical accuracy (1.6 mHa) here.**
+
+CAREFUL: that is a statement about HCI, NOT a bound. HCI is a greedy heuristic
+whose selection criterion is first-order perturbation theory evaluated against
+the current, incomplete wavefunction; the optimal N-determinant subspace is a
+combinatorial optimisation no practical method solves. The real bound is the
+ORACLE: sort the exact FCI vector by |c_D|, keep the top N, diagonalise there.
+That is what every selection heuristic approximates, and it is cheap to compute
+on H10 (63,504 determinants; pyci can build and solve the full space, and the
+coefficients come back in its own determinant ordering, so there is no
+PySCF<->pyci mapping to get wrong). It has NOT been measured yet — do that
+before repeating any claim about what is reachable at a given subspace size.
+
+If the oracle at 3,175 is also ~40 mHa, 5% coverage is a hard wall and
+"did we reach chemical accuracy" is the wrong question on a strongly correlated
+chain — a method needing half of FCI has argued itself out of a job. If the
+oracle is instead near chemical accuracy, then such a subspace EXISTS and HCI
+merely fails to find it, the limiting factor is selection quality, and that is
+exactly what the policy is supposed to supply.
 
 Do NOT respond to a bad transfer number by raising `qsci.coverage` until chemical
-accuracy appears. That optimises the wrong thing.
+accuracy appears, at least not before the oracle curve is measured. If the
+headroom is in selection rather than in subspace size, a bigger cap optimises the
+wrong thing.
 
 ### What to report instead
 
