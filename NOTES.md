@@ -2106,3 +2106,63 @@ refinement picks, nearly independent of the circuit that seeded it.
 floor at its own subspace size? If the baseline is far above it, the policy is the
 limit. If it is close, the cap is — and the answer is a different yardstick, not a
 bigger cap.
+
+## Decision (2026-09-28): prefer `spec: excitation`, and the scaling worry behind it
+
+**Preference, not yet applied:** default to `operator_pool.spec: excitation` for
+almost everything, because one action is then a genuine excitation generator
+rather than a Pauli fragment of one — the physically faithful choice. The
+`pauli_evolution` regimes compose circuits from fragments, which is cheaper per
+gate but is not UCCSD and has no clean physical reading.
+
+Not switched yet. Three things must be settled first.
+
+### BLOCKER: ExcitationPool's coefficient handling looks wrong
+
+```python
+operator = None
+for p in g.generator.paulistrings:
+    term = convert_pauli_to_cudaq_spin(p)
+    operator = term if operator is None else (operator + term * p._coeff)
+```
+
+The FIRST Pauli string is added with no coefficient; every later one is scaled by
+`p._coeff`. `convert_pauli_to_cudaq_spin` builds the Pauli WORD only and drops the
+coefficient (verified), so nothing else restores it. For a JW excitation whose
+terms all have coefficients of equal magnitude (±1/8 for a double), the first term
+gets ~8x the weight of the others and loses its sign — the operator would not be
+the generator it claims to be.
+
+NOT yet confirmed: `p._coeff`'s actual contents were not inspected (needs tequila,
+i.e. the container). Verify before switching the default, because if it is a bug
+then `spec: excitation` has never produced a faithful generator and any historical
+result using it is suspect. Likely fix: scale every term including the first.
+
+### Cost: excitation gates are ~8x deeper
+
+One `pauli_evolution` action compiles to one Pauli rotation; one `excitation`
+action to ~8. So `spec: excitation` at fixed L is NOT comparable to the
+`pauli_evolution` results — the comparison has to be matched by compiled gate
+count (`get_gate_count`), not by L. Every existing number uses
+`pauli_evolution` + `only_use_first_pauli: true`.
+
+### TABLED: CCSD-driven pool construction will not scale
+
+Even with `spec: excitation`, pool membership still comes from screening CCSD
+amplitudes, and that is a problem for large molecules on two counts: CCSD itself
+is O(N^6) and, worse, it is unreliable exactly where correlation is strong (the
+regime QSCI exists for — see the N2-at-2.5A note above). The pool is also O(n^4)
+candidates to enumerate and featurise.
+
+The **pointer action space** (`models/pointer.py`, `models/pointer_dag.py`) is the
+answer already built for this: the policy constructs each excitation from orbital
+pointers and the pool GROWS via `ensure_excitation()`, so there is no screened
+menu and no CCSD. With `operator_pool.ccsd_screening: false` it is CCSD-free end
+to end. Cost per decision is O(n) instead of O(n^4) up front.
+
+**Consequence of preferring `spec: excitation`:** the pointer's
+`make_excitation_operator` currently returns only the FIRST Pauli string, mirroring
+`pauli_evolution` + `only_use_first_pauli: true` so that a pointer gate costs
+exactly what a pool gate costs. If excitation-faithful becomes the default, the
+pointer must emit the full generator too, or the two halves of the project will
+disagree about what an action is.
