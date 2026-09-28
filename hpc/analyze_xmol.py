@@ -87,7 +87,10 @@ def fmt(vals, width=9):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--group", default="xmol-lih-h2o-to-n2")
+    ap.add_argument("--group", default="hchain-h4h6h8-to-h10",
+                    help="W&B group. Defaults to the LIVE transfer experiment "
+                         "(hydrogen chains). The retired LiH+H2O->N2 group is "
+                         "xmol-lih-h2o-to-n2.")
     ap.add_argument("--project", default="gqe-for-qsci")
     ap.add_argument("--entity", default=None)
     ap.add_argument(

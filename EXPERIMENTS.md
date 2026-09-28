@@ -1,5 +1,44 @@
 # Experiment Commands
 
+## Current state
+
+**Live transfer experiment:** `hchain_dag_gnn` (transfer) and
+`hchain_baseline_h10` (matched baseline) — train on H4/H6/H8 at nine bond
+lengths (27 molecules, 8/12/16 qubits), evaluate zero-shot on H10 (20 qubits).
+W&B group `hchain-h4h6h8-to-h10`. See "Phase 5" below.
+
+**Retired:** `xmol_dag_gnn` / `xmol_baseline_n2` (LiH + H2O -> N2). Two training
+molecules is not a training set, and it used a flat `qsci.max_dim` whose coverage
+varied 100x across the set. Its W&B runs are kept as history; do not build on it.
+The "Phase 4" section below is preserved for reproducibility only.
+
+**In flight:** the five `hchain_baseline_h10` seeds were submitted and need
+syncing and analysis:
+
+```bash
+singularity exec ~/images/cudaq_sandbox wandb sync ~/gqe-for-qsci/outputs/gqe-for-qsci/hchain-*/wandb/offline-run-*
+singularity exec ~/images/cudaq_sandbox python3 hpc/analyze_xmol.py
+```
+
+The first question those numbers answer: is the H10 **baseline** near chemical
+accuracy (1.6 mHa)? If it is still ~100 mHa, the experiment is limited by
+subspace truncation rather than by policy quality and `coverage` needs raising
+again before any conclusion is drawn.
+
+**Standing conventions** (adopted 2026-09, apply to all new experiments):
+
+| knob | value | why |
+|---|---|---|
+| seeds | fixed set 1-5, as a PBS array (`qsub -J 1-5 -r y`) | every earlier result was single-seed, which is why comparisons were inconclusive |
+| `qsci.coverage` | 0.05 | subspace cap as a fraction of each molecule's CI space, so the reward means the same thing on every molecule |
+| `sampler.shots` | 10_000 | at 1k an N2 circuit sampled only 31 distinct determinants, so the raw subspace was sampling-limited |
+
+**Open decisions** are recorded in NOTES.md under "Pointer action space: open
+decisions" — `only_use_first_pauli`, the arbitrary angle given to single
+excitations, and the fact that CCSD still runs even though the pointer policy
+never reads its pool.
+
+
 These configs keep W&B runs grouped so GPT-2 and diffusion can be overlaid in the
 same project charts.
 
@@ -105,7 +144,10 @@ held-out geometries (1.45, 3.2) is step 6, not yet wired.
 docker run --rm --entrypoint /bin/bash -e WANDB_API_KEY=<KEY> -e OMPI_MCA_pml=ob1 -e OMPI_MCA_btl=self,tcp -e OMPI_MCA_opal_warn_on_missing_libcuda=0 -v "${workdir}:/workspace" -w /workspace gqe_qsci_cpu -lc "pip install torch_geometric && python3 train.py experiment=n2_bond_scan_dag_gnn"
 ```
 
-## Phase 4 — cross-molecule: LiH + H2O -> zero-shot N2 (ABCI-Q)
+## Phase 4 (RETIRED) — cross-molecule: LiH + H2O -> zero-shot N2 (ABCI-Q)
+
+Superseded by Phase 5. Kept so the existing W&B runs stay reproducible;
+the epoch counts and `dmax=170` below reflect the retired configuration.
 
 The thesis experiment. One feature-based policy trains on LiH (10 qubits) and
 H2O (12 qubits) and is evaluated **zero-shot on N2 (16 qubits)** — different

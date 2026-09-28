@@ -1,4 +1,19 @@
 # @package _global_
+# ============================ RETIRED ============================
+# Superseded by experiment=hchain_dag_gnn / hchain_baseline_h10.
+# Kept only so the runs already in W&B group xmol-lih-h2o-to-n2 remain
+# reproducible. Do NOT start new work from this experiment.
+#
+# Two reasons it was retired:
+#   1. Two training molecules is too few to call a training set. The
+#      replacement trains on 27 (H4/H6/H8 x 9 bond lengths) and holds out a
+#      LARGER system (H10), making the eval a size extrapolation.
+#   2. It used a flat qsci.max_dim, which covers 100% of LiH's CI space and
+#      5.4% of N2's. The reward therefore meant something different on each
+#      molecule and the held-out one sat in a truncation regime never seen in
+#      training. qsci.coverage now scales the cap with system size; these
+#      configs are deliberately left un-migrated.
+# =================================================================
 # PHASE 4 — cross-molecule generalization (the thesis experiment).
 #
 # One feature-based policy trained on LiH (10q) + H2O (12q), evaluated ZERO-SHOT
