@@ -35,9 +35,17 @@ Layout
     ExcitationRules        closed-form validity masks, O(n) per step
     OrbitalEncoder         graph transformer over orbitals -> (n, H) keys
     ExcitationPointer      the four-step decode; sampling AND replay
+    PointerActionSpace     all of the above as ONE module a policy can own
 
 STOP/NONE is encoded as index n (one past the last orbital), so every step has
 a uniform candidate axis of size n + 1.
+
+Nothing here is specific to a generator architecture: ExcitationPointer takes a
+(B, H) query from anywhere. PointerActionSpace packages the parts plus the
+index plumbing, so a policy only has to answer "what is the context vector for
+the gate being decoded?" — the pooled DAG frontier for PointerDAGGNNPolicy, and
+(planned) a GPT-2 hidden state or a diffusion denoiser position. See NOTES.md,
+"Pointer action space".
 """
 
 from __future__ import annotations
@@ -490,3 +498,161 @@ def excitation_pairs(row, n: int) -> list[tuple[int, int]]:
     if j != n and b != n:
         pairs.append((b, j))
     return pairs
+
+
+# ---------------------------------------------------------------------------
+# The action space as one module
+# ---------------------------------------------------------------------------
+
+class PointerActionSpace(nn.Module):
+    """
+    Everything a policy needs to USE orbital pointers as its action space,
+    independent of how the policy produces its context vector.
+
+    REVIEW PENDING (2026-09-28): extracted from PointerDAGGNNPolicy by Claude and
+    verified bitwise-equivalent on a stub pool, but not yet read through by a
+    human and not yet re-checked by hpc/smoke_pointer.py. See NOTES.md,
+    "PointerActionSpace refactor". Delete this paragraph once reviewed.
+
+    A host policy supplies a (N, H) query per gate and gets back pointer tuples,
+    their log-probabilities, and a gate embedding to feed back into itself:
+
+        orb_keys = space.keys()                       # (n, H), once per forward
+        picks, logp = space.decode(query, orb_keys, beta)
+        emb = space.embed(picks, orb_keys)            # (N, H) for the next input
+        ops = space.to_indices(picks)                 # pool indices for the sampler
+
+    Replay uses the same decode() with forced=space.to_picks(indices), so
+    sampling and scoring cannot drift apart — the GRPO importance ratio depends
+    on them being the same code path.
+
+    N is whatever the host batches over: B for one gate at a time (a DAG or
+    autoregressive policy), or B*L when every position decodes at once (a
+    diffusion denoiser). The rules' masks are built per call at that size.
+
+    The pool is held BY REFERENCE and mutated: to_indices() asks it to
+    materialise excitations as they are first sampled (ensure_excitation), so
+    the pool grows instead of being screened up-front by CCSD. Indices are
+    therefore only meaningful within one run; to_picks() raises rather than
+    mis-decode a stale one.
+    """
+
+    def __init__(
+        self,
+        pool,
+        hidden_size: int,
+        encoder_layers: int = 2,
+        encoder_heads: int = 4,
+        dropout: float = 0.0,
+        single_angle: float = 0.1,
+        allow_singles: bool = True,
+    ):
+        super().__init__()
+        self.hidden_size = int(hidden_size)
+        self.single_angle = float(single_angle)
+        self.allow_singles = bool(allow_singles)
+
+        orb, pair = build_orbital_inputs(pool)
+        self.encoder = OrbitalEncoder(
+            orb.shape[1], pair.shape[-1], hidden_size,
+            num_layers=encoder_layers, num_heads=encoder_heads, dropout=dropout,
+        )
+        self.pointer = ExcitationPointer(hidden_size, pair.shape[-1])
+
+        self.register_buffer("orb_feats", torch.from_numpy(orb))
+        self.register_buffer("pair_feats", torch.from_numpy(pair))
+        self._attach(pool, orb)
+
+    # -- molecule binding ---------------------------------------------------
+
+    def _attach(self, pool, orb):
+        self.pool = pool
+        self.n_orbitals = int(orb.shape[0])
+        self.rules = ExcitationRules(orb, device=self.orb_feats.device,
+                                     allow_singles=self.allow_singles)
+
+    def set_molecule(self, bundle):
+        """
+        Re-point at another molecule. There is no menu, no footprint table and
+        no commutation matrix to swap — only the orbital table changes, and its
+        ROW COUNT may differ without any parameter being resized, because the
+        head scores orbitals rather than operators. Never call mid-rollout.
+        """
+        orb, pair = build_orbital_inputs(bundle.pool)
+        device = self.orb_feats.device
+        self.orb_feats = torch.from_numpy(orb).to(device)
+        self.pair_feats = torch.from_numpy(pair).to(device)
+        self._attach(bundle.pool, orb)
+
+    # -- the three calls a host policy makes --------------------------------
+
+    def keys(self):
+        """(n, H) encoded orbitals. Compute ONCE per forward and pass around."""
+        # The mask tables are not nn.Module state, so policy.to(device) does not
+        # reach them — Lightning builds the policy on CPU and moves it to the
+        # GPU afterwards. No-op once they are already there.
+        self.rules.to(self.orb_feats.device)
+        return self.encoder(self.orb_feats, self.pair_feats)
+
+    def decode(self, query, orb_keys, inv_temperature, forced=None,
+               return_entropy=False):
+        """
+        (N, H) query -> picks (N, 4), logp (N,) summed over the four steps,
+        and entropy (N,) when requested.
+
+        A gate's log-probability is the sum over its pointer steps, which is
+        what the host wants per position; the per-step breakdown stays inside.
+        """
+        out = self.pointer(
+            query, orb_keys, self.pair_feats, self.rules, inv_temperature,
+            forced=forced, return_entropy=return_entropy,
+        )
+        picks, step_logp = out[0], out[1]
+        if return_entropy:
+            return picks, step_logp.sum(dim=-1), out[2].sum(dim=-1)
+        return picks, step_logp.sum(dim=-1)
+
+    def embed(self, picks, orb_keys):
+        """(N, H) embedding of a decoded gate — what replaces a token lookup."""
+        return gate_embedding(picks, orb_keys)
+
+    def footprint(self, row):
+        """Spin-orbitals one decoded gate touches (its qubit footprint)."""
+        return excitation_qubits(row, self.n_orbitals)
+
+    # -- index plumbing, for the parts of the stack that are index-keyed ------
+
+    def to_indices(self, picks):
+        """
+        (..., 4) pointer tuples -> (...) long pool indices, materialising any
+        excitation the pool has not seen before.
+        """
+        flat = picks.reshape(-1, 4)
+        idx = [
+            self.pool.ensure_excitation(
+                key, excitation_pairs(key, self.n_orbitals),
+                single_angle=self.single_angle,
+            )
+            for key in (tuple(int(v) for v in row) for row in flat)
+        ]
+        return torch.tensor(
+            idx, dtype=torch.long, device=picks.device
+        ).view(picks.shape[:-1])
+
+    def to_picks(self, indices):
+        """(...) pool indices -> (..., 4) pointer tuples, via the pool's map."""
+        keys = getattr(self.pool, "excitation_keys", None)
+        flat = indices.reshape(-1)
+        rows = []
+        for k in (int(v) for v in flat):
+            if keys is None or k not in keys:
+                raise RuntimeError(
+                    f"operator index {k} was not produced by this policy. "
+                    "Pointer indices only mean something within one run — "
+                    "re-run with trainer.load_checkpoint=false and a fresh "
+                    "exp_tag."
+                )
+            rows.append(list(keys[k]))
+        return torch.tensor(
+            rows, dtype=torch.long, device=indices.device
+        ).view(*indices.shape, 4)

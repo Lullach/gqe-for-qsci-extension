@@ -19,6 +19,11 @@ What that removes, relative to CircuitDAGGNNPolicy:
     and b > a now make each excitation unspellable more than one way, so the
     redundancy is gone at the source rather than masked out afterwards.
 
+This class is now only the DAG HALF of that: the action space itself lives in
+PointerActionSpace (models/pointer.py), which any generator can own. What is
+DAG-specific is just the query — the pooled frontier of the partial circuit
+graph — plus the graph bookkeeping around it.
+
 Interface contract
 ------------------
 Everything downstream is keyed by integer index — sampler.py does
@@ -35,16 +40,12 @@ turns up in log_prob().
 
 from __future__ import annotations
 
-import numpy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from gqe_qsci.gqe.models.policy import Policy
-from gqe_qsci.gqe.models.pointer import (
-    ExcitationPointer, ExcitationRules, OrbitalEncoder,
-    build_orbital_inputs, excitation_pairs, excitation_qubits, gate_embedding,
-)
+from gqe_qsci.gqe.models.pointer import PointerActionSpace
 
 try:
     from torch_geometric.nn import GATConv
@@ -94,19 +95,13 @@ class PointerDAGGNNPolicy(Policy):
 
         self.ngates = int(ngates)
         self.hidden_size = int(hidden_size)
-        self.single_angle = float(single_angle)
-        self.allow_singles = bool(allow_singles)
 
-        orb, pair = build_orbital_inputs(pool)
-        self.encoder = OrbitalEncoder(
-            orb.shape[1], pair.shape[-1], hidden_size,
-            num_layers=encoder_layers, num_heads=encoder_heads, dropout=dropout,
+        self.space = PointerActionSpace(
+            pool, hidden_size,
+            encoder_layers=encoder_layers, encoder_heads=encoder_heads,
+            dropout=dropout, single_angle=single_angle,
+            allow_singles=allow_singles,
         )
-        self.pointer = ExcitationPointer(hidden_size, pair.shape[-1])
-
-        self.register_buffer("orb_feats", torch.from_numpy(orb))
-        self.register_buffer("pair_feats", torch.from_numpy(pair))
-        self._attach(pool, orb)
 
         # Gate slots that have not been placed yet are isolated nodes with no
         # edges, so this vector never reaches the pooled frontier — it exists to
@@ -125,25 +120,14 @@ class PointerDAGGNNPolicy(Policy):
 
     # -- molecule binding ---------------------------------------------------
 
-    def _attach(self, pool, orb):
-        self.pool = pool
-        self.n_qubits = int(orb.shape[0])
-        self.rules = ExcitationRules(orb, device=self.orb_feats.device,
-                                     allow_singles=self.allow_singles)
+    @property
+    def n_qubits(self):
+        """One DAG wire per spin-orbital, so the two counts are the same."""
+        return self.space.n_orbitals
 
     def set_molecule(self, bundle):
-        """
-        Re-point at another molecule. Unlike the pool-based policies there is no
-        menu, no footprint table and no commutation matrix to swap — only the
-        orbital table changes, and its ROW COUNT may differ without any parameter
-        being resized, because the head scores orbitals rather than operators.
-        Never call mid-rollout.
-        """
-        orb, pair = build_orbital_inputs(bundle.pool)
-        device = self.orb_feats.device
-        self.orb_feats = torch.from_numpy(orb).to(device)
-        self.pair_feats = torch.from_numpy(pair).to(device)
-        self._attach(bundle.pool, orb)
+        """Re-point at another molecule; see PointerActionSpace.set_molecule."""
+        self.space.set_molecule(bundle)
 
     # -- DAG plumbing -------------------------------------------------------
 
@@ -195,7 +179,7 @@ class PointerDAGGNNPolicy(Policy):
     def _advance(self, picks, gate_node, frontier, edge_srcs, edge_dsts):
         """Wire the new gate to the frontier of every orbital it touches."""
         for b in range(picks.shape[0]):
-            for q in excitation_qubits(tuple(int(v) for v in picks[b]), self.n_qubits):
+            for q in self.space.footprint(tuple(int(v) for v in picks[b])):
                 edge_srcs[b].append(int(frontier[b, q]))
                 edge_dsts[b].append(gate_node)
                 frontier[b, q] = gate_node
@@ -208,12 +192,7 @@ class PointerDAGGNNPolicy(Policy):
         forced : (B, L, 4) long to replay stored gates, else None to sample.
         Returns picks (B, L, 4), logp (B, L), entropy (B, L) or None.
         """
-        # The mask tables are not nn.Module state, so policy.to(device) does not
-        # reach them — Lightning builds the policy on CPU and moves it to the
-        # GPU afterwards. No-op once they are already there.
-        self.rules.to(self.orb_feats.device)
-
-        orb_keys = self.encoder(self.orb_feats, self.pair_feats)
+        orb_keys = self.space.keys()
         frontier, edge_srcs, edge_dsts = self._init_dag_state(batch, device)
 
         gate_embs, all_picks, all_logp, all_ent = [], [], [], []
@@ -221,19 +200,18 @@ class PointerDAGGNNPolicy(Policy):
             node_embs = self._node_embeddings(orb_keys, gate_embs, batch)
             query = self._pool_frontier(node_embs, frontier, edge_srcs,
                                         edge_dsts, device)
-            out = self.pointer(
-                query, orb_keys, self.pair_feats, self.rules, inv_temperature,
+            out = self.space.decode(
+                query, orb_keys, inv_temperature,
                 forced=(None if forced is None else forced[:, step]),
                 return_entropy=return_entropy,
             )
-            picks, step_logp = out[0], out[1]
+            picks, gate_logp = out[0], out[1]
             if return_entropy:
-                all_ent.append(out[2].sum(dim=-1))
+                all_ent.append(out[2])
 
-            gate_embs.append(gate_embedding(picks, orb_keys))
+            gate_embs.append(self.space.embed(picks, orb_keys))
             all_picks.append(picks)
-            # A gate's log-probability is the sum over its four pointer steps.
-            all_logp.append(step_logp.sum(dim=-1))
+            all_logp.append(gate_logp)
             self._advance(picks, self.n_qubits + step, frontier, edge_srcs, edge_dsts)
 
         return (
@@ -250,47 +228,11 @@ class PointerDAGGNNPolicy(Policy):
             "sample_sequence(); act() is not supported."
         )
 
-    def _to_indices(self, picks):
-        """
-        (B, L, 4) pointer tuples -> (B, L) long pool indices, materialising any
-        excitation the pool has not seen before.
-        """
-        n = self.n_qubits
-        rows = []
-        for b in range(picks.shape[0]):
-            row = []
-            for t in range(picks.shape[1]):
-                key = tuple(int(v) for v in picks[b, t])
-                row.append(self.pool.ensure_excitation(
-                    key, excitation_pairs(key, n), single_angle=self.single_angle
-                ))
-            rows.append(row)
-        return torch.tensor(rows, dtype=torch.long, device=picks.device)
-
-    def _to_picks(self, indices):
-        """(B, L) pool indices -> (B, L, 4) pointer tuples, via the pool's map."""
-        keys = getattr(self.pool, "excitation_keys", None)
-        rows = []
-        for b in range(indices.shape[0]):
-            row = []
-            for t in range(indices.shape[1]):
-                k = int(indices[b, t])
-                if keys is None or k not in keys:
-                    raise RuntimeError(
-                        f"operator index {k} was not produced by this policy. "
-                        "Pointer indices only mean something within one run — "
-                        "re-run with trainer.load_checkpoint=false and a fresh "
-                        "exp_tag."
-                    )
-                row.append(list(keys[k]))
-            rows.append(row)
-        return torch.tensor(rows, dtype=torch.long, device=indices.device)
-
     def sample_sequence(self, state, inv_temperature):
         B = state["idx"].shape[0]
         device = state["idx"].device
         picks, _, _ = self._rollout(B, inv_temperature, device)
-        ops = self._to_indices(picks)
+        ops = self.space.to_indices(picks)
         state["idx"] = torch.cat((state["idx"], ops), dim=1)
         return state
 
@@ -304,7 +246,7 @@ class PointerDAGGNNPolicy(Policy):
         ignored, matching CircuitDAGGNNPolicy.
         """
         gate_tokens = indices[:, 1:]                 # strip BOS
-        forced = self._to_picks(gate_tokens)
+        forced = self.space.to_picks(gate_tokens)
         _, logp, entropy = self._rollout(
             gate_tokens.shape[0], inv_temperature, gate_tokens.device,
             forced=forced, return_entropy=return_entropy,

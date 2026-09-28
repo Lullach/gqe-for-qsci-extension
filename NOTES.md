@@ -2233,3 +2233,84 @@ to end. Cost per decision is O(n) instead of O(n^4) up front.
 exactly what a pool gate costs. If excitation-faithful becomes the default, the
 pointer must emit the full generator too, or the two halves of the project will
 disagree about what an action is.
+
+---
+
+## PointerActionSpace refactor — UNREVIEWED, CHECK THIS BEFORE BUILDING ON IT
+
+*Claude wrote this on 2026-09-28; Lukas has not read the diff yet. Verified
+bitwise-equivalent (below) but NOT reviewed for design, naming or comments.*
+
+**What moved.** `models/pointer_dag.py` held the action space and the DAG in one
+class. The action-space half is now `PointerActionSpace` in `models/pointer.py`:
+the orbital/pairwise buffers, `OrbitalEncoder`, `ExcitationPointer`,
+`ExcitationRules`, `set_molecule`, and the index plumbing that was `_to_indices`
+/ `_to_picks`. `PointerDAGGNNPolicy` keeps only what is genuinely DAG — the
+frontier, the edge lists, the GAT pass — and calls:
+
+```python
+orb_keys = self.space.keys()                        # (n, H), once per forward
+picks, logp = self.space.decode(query, orb_keys, beta, forced=...)
+emb = self.space.embed(picks, orb_keys)             # replaces a token lookup
+ops = self.space.to_indices(picks)                  # pool indices for sampler.py
+```
+
+`decode()` returns the log-prob already summed over the four pointer steps (the
+host wants one number per gate); the per-step breakdown stays inside
+`ExcitationPointer`. `n_qubits` on the policy is now a read-only property
+delegating to `space.n_orbitals`.
+
+**Why.** The pointer machinery was never DAG-specific — `ExcitationPointer`
+takes any `(B, H)` query. Porting it to GPT-2 and the diffusion models means
+supplying a different query, and without this split each port would copy the
+encoder, the rules, the device handling and the index round-trip. See the port
+sketch below.
+
+**Verification.** `PointerDAGGNNPolicy` on a stub pool (no pyscf), seeded:
+parameters, sampled `idx`, `log_prob`, entropy, gradients, and a molecule swap
+to a different orbital count are all **bitwise identical** before and after.
+Separately checked that `decode` works folded over `B*L` queries at once (the
+diffusion use case) and that `to_indices` / `to_picks` round-trip exactly on
+`(B, L)`.
+
+**What that does NOT cover:** `hpc/smoke_pointer.py` has not been re-run (it
+needs pyscf, so Docker), and nothing has run on a cluster. Do both before
+trusting this.
+
+**One behavior change to know about:** `state_dict` keys gained a `space.`
+prefix, so an old pointer checkpoint will not load. Pointer runs already mandate
+`trainer.load_checkpoint=false`, so this costs nothing today.
+
+### Porting the pointer action space to GPT-2 and diffusion (sketch, not built)
+
+Only the query differs.
+
+**GPT-2.** The hidden state at position t is the query for gate t. `_FeatureWTE`
+(index → scorer key) becomes `space.embed(picks, orb_keys)`, plus a learned BOS
+vector, since column 0 is no longer an operator to look up; `_ScorerHead`
+becomes `space.decode(h_t, ...)`. Replay stays ONE teacher-forced transformer
+pass, then all L positions decode with `forced=`, folded into the pointer batch.
+Two things break: `repetition_penalty` scatters over token IDs and has no
+meaning here (better: mask an exact duplicate excitation at pointer step 4), and
+`act()` + the KV cache have nowhere to keep the picks, so implement
+`sample_sequence()` instead.
+
+**Diffusion (absorbing).** Every position decodes its own gate each denoiser
+step: fold `(B, L)` into the pointer batch, so the rules' masks are `(B*L, n+1)`.
+Input embedding = `space.embed` for revealed positions, a learned `[MASK]`
+vector for masked ones (`mask_token` / `vocab_size` / `_refresh_mask_token` all
+disappear — no token vocabulary). The `reveal_step` trajectory machinery is
+unchanged; a committed position now contributes the sum of its four pointer
+terms. Store `picks` in the buffer alongside `reveal_step` rather than
+round-tripping indices through `pool.excitation_keys` at every step. Cheap win:
+decode only the positions that are still masked, instead of computing `(B, L, V)`
+and discarding most of it.
+
+**Scale caveat, same family as ELBO → trajectory:** a per-gate log-prob becomes
+a sum of four pointer terms rather than one categorical term, and β sharpens
+each of the four. The GRPO clip range is scale-sensitive, so do not assume the
+pool-run clip settings transfer.
+
+**Order.** Run `n2_pointer` vs `n2_pool_matched` first. Port only if pointers
+win or draw — a draw is already a result, since it removes CCSD from the loop.
+GPT-2 before diffusion: less work, and it is the paper's baseline architecture.
