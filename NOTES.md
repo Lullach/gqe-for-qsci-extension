@@ -1996,3 +1996,74 @@ fills the cache in whatever order sampling visits, so a replay buffer or
 checkpoint from another run maps indices to different excitations. `_to_picks()`
 raises rather than silently mis-decoding, but always run with
 `trainer.load_checkpoint=false` and a fresh `exp_tag`.
+
+## The yardstick: matched subspace size vs HCI, NOT chemical accuracy
+
+Measured 2026-09-28 on H10 (10e,10o; 63,504 determinants) at 1.6 A, the geometry
+`hchain_baseline_h10` trains on. This changes what the transfer experiments should
+report, so read it before designing the next one.
+
+### Chemical accuracy is unreachable here, for anyone
+
+Heat-bath CI on H10 at 1.6 A, error vs FCI:
+
+| determinants | HCI error | % of CI space |
+|---|---|---|
+| 449 | 119.3 mHa | 0.7% |
+| 1,883 | 59.1 mHa | 3.0% |
+| 5,258 | 27.8 mHa | 8.3% |
+| 11,347 | 11.9 mHa | 17.9% |
+| 18,526 | 4.4 mHa | 29.2% |
+| 27,310 | 0.7 mHa | 43.0% |
+
+**Chemical accuracy (1.6 mHa) needs ~20,000-30,000 determinants, i.e. 30-50% of
+the full CI space.** No selected-CI method — quantum-sampled or classical —
+reaches it at a sensible cap on this system. So "did we reach chemical accuracy"
+is the wrong question on a strongly correlated chain: a method that needs half of
+FCI has argued itself out of a job, and the cost explodes for nothing.
+
+Do NOT respond to a bad transfer number by raising `qsci.coverage` until chemical
+accuracy appears. That optimises the wrong thing.
+
+### What to report instead
+
+> At matched subspace size, the policy selects better determinants than heat-bath
+> CI — and a policy transferred from smaller chains retains most of that advantage.
+
+This is measurable, cheap, and it is the comparison the value-proposition
+critique actually demands (see "Value proposition" above). Baseline
+`hchain_baseline_h10` over 5 seeds, against HCI interpolated to the same size:
+
+| stage | QSCI subspace | QSCI error | HCI there | margin |
+|---|---|---|---|---|
+| GQE-optimized | ~1,150 | 68.84 +/- 2.61 | ~75 mHa | ~8% better |
+| Global-refined | 3,175 | 32.65 +/- 0.90 | ~40 mHa | ~19% better |
+
+Random determinant selection is 287 mHa at 50% of the space, so *selection* is
+doing essentially all the work — the premise of the method, now measured.
+
+Two caveats that must travel with those numbers:
+1. The HCI figures are **interpolated** — `hci_curve` lands on its own growth
+   steps, so there is no point at exactly 1,150 or 3,175. Margins of 8-19% are
+   within the range where HCI parameters matter. TODO: truncate HCI's ranked
+   determinants to exactly N and diagonalise, to make this a real measurement.
+2. `Global-refined` is partly apples-to-oranges: that refinement is itself a
+   classical Hamiltonian-driven selection, so the row compares *our classical
+   refinement seeded by quantum sampling* against *their classical selection*.
+   **GQE-optimized is the row that isolates the quantum contribution** (sampled
+   determinants plus symmetry completion only), and its margin is the smaller one.
+
+### Why the first H-chain run looked strange
+
+`Global-refined subspace_dim` hit the 3,175 cap by epoch ~20 and stayed flat for
+the remaining 520 epochs, while the raw subspace kept growing (150 -> 1,150
+through epoch 140). For 96% of training the headline metric was pinned at the cap
+and structurally could not reflect the policy improving. That is also why the
+refined error had ~0.02 mHa seed variance at some geometries while the raw error
+varied by tens of mHa: once refinement saturates, the final subspace is whatever
+refinement picks, nearly independent of the circuit that seeded it.
+
+**Diagnostic to run first on any transfer result:** is the BASELINE near the HCI
+floor at its own subspace size? If the baseline is far above it, the policy is the
+limit. If it is close, the cap is — and the answer is a different yardstick, not a
+bigger cap.
