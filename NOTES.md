@@ -2273,9 +2273,19 @@ Separately checked that `decode` works folded over `B*L` queries at once (the
 diffusion use case) and that `to_indices` / `to_picks` round-trip exactly on
 `(B, L)`.
 
-**What that does NOT cover:** `hpc/smoke_pointer.py` has not been re-run (it
-needs pyscf, so Docker), and nothing has run on a cluster. Do both before
-trusting this.
+**What that does NOT cover:** nothing has run on a cluster, and no human has
+read the diff.
+
+`hpc/smoke_pointer.py` was re-run afterwards in the CPU image and passes
+(35/35, and fully green with `torch_geometric` installed) — but note that it
+never constructs `PointerDAGGNNPolicy`, so it exercises the moved primitives and
+the import surface, not the policy. `hpc/smoke_pointer_dag.py` was added to
+close exactly that gap: factory → policy → `sample_sequence` → pool indices →
+`log_prob`, against a REAL `OperatorPool` on LiH/H2O/N2 (43/43). Its
+load-bearing check is that the log-prob computed while sampling equals the one
+`log_prob()` recovers from the stored integer indices, which runs through
+`ensure_excitation` and back out through `excitation_keys` — a stub pool cannot
+test that, and a break there would corrupt the GRPO ratio silently.
 
 **One behavior change to know about:** `state_dict` keys gained a `space.`
 prefix, so an old pointer checkpoint will not load. Pointer runs already mandate

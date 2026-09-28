@@ -41,10 +41,26 @@ hpc/
 ├── cudaq_qsci.def         Singularity definition (mirrors ../dockerfile)
 ├── build_image.sh         builds the .sif on the login node
 ├── smoke_test.py          verifies GPU + CUDA-Q + project stack
+├── smoke_cross_molecule.py  qubit-count swaps on a feature-based policy
+├── smoke_pointer.py       pointer action space: masks, encoder, pointer (CPU, ~1 min)
+├── smoke_pointer_dag.py   PointerDAGGNNPolicy against a real pool (CPU, needs torch_geometric)
+├── check_pointer_convention.py  fragment vs full-generator gate equivalence
+├── check_excitation_coeffs.py   JW coefficients of an excitation generator
+├── analyze_xmol.py        zero-shot vs baseline errors across seeds
+├── plot_results.py        figures from the per-circuit CSVs
 ├── ssh_config.example     ~/.ssh/config entry for `ssh abciq` (generic, no real username)
 └── jobs/
+    ├── _stage_container.sh  copies the sandbox to node-local scratch
     ├── smoke_gpu.sh       1 GPU, 30 min — environment check
+    ├── smoke_cross_molecule.sh  1 GPU — the cross-molecule gate
     └── train.sh           1 GPU, 24 h  — a training run
+```
+
+The `smoke_*.py` checks marked CPU run on a laptop in the CPU image; only
+`smoke_test.py` and the `jobs/` scripts need the cluster:
+
+```powershell
+docker run --rm --entrypoint /bin/bash -e OMPI_MCA_pml=ob1 -e OMPI_MCA_btl=self,tcp -e OMPI_MCA_opal_warn_on_missing_libcuda=0 -v "${PWD}:/workspace" -w /workspace gqe_qsci_cpu -lc "pip install torch_geometric && python3 hpc/smoke_pointer_dag.py"
 ```
 
 ## One-time setup
