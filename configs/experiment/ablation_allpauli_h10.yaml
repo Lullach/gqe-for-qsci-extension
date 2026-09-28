@@ -1,0 +1,64 @@
+# @package _global_
+# ABLATION: only_use_first_pauli = false, everything else the H10 baseline.
+#
+# Generated from hchain_baseline_h10.yaml. The flag changes the SIZE OF THE
+# VOCABULARY, not the depth of a gate -- build_operator_pool appends every Pauli
+# string as its own pool entry and the flag merely breaks after the first. So
+# this is directly comparable at fixed L to the existing 5-seed baseline, with no
+# compiled-gate-count matching required. (That matching IS required for
+# spec: excitation, which is a different change; see NOTES.md.)
+defaults:
+  - override /molecule: h10
+  - override /model: dag_gnn_features
+
+exp_tag: allpauli-h10-s${trainer.seed}
+ngates: 10
+operator_pool:
+  dedup_excitations: true
+  # The whole point of this config. false keeps EVERY Pauli string of
+  # each excitation as its own pool entry instead of only the first, so
+  # the vocabulary grows while the depth per gate is unchanged -- the
+  # two are therefore directly comparable at fixed L, with no
+  # gate-count matching needed.
+  only_use_first_pauli: false
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: pauli-fragment-ablation
+  tags: ["ablation", "all-pauli-fragments", "trained-on-h10", "dag-gnn", "featscorer"]
+  notes: >-
+    Ablation: only_use_first_pauli=false. Every Pauli string of each
+    excitation becomes its own pool entry rather than just the first, so the
+    action space grows while a gate still compiles to one rotation. Directly
+    comparable at fixed L to hchain-baseline-h10-s* (5 seeds), which differs
+    only in this flag. Asks whether the policy benefits from access to the
+    other fragments, or whether the larger action space just costs
+    exploration.
+trainer:
+  max_iters: 540          # matches hchain_dag_gnn's total rollout groups
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 100
+  precision: 32-true
+sampler:
+  # 10k, not the paper's 1k. With 1000 shots an N2 circuit sampled only 31
+  # DISTINCT determinants (num_sampled_basis), so the raw QSCI subspace was
+  # sampling-limited rather than cap-limited — raising qsci.coverage alone
+  # would only let classical refinement fill more of it, not improve the
+  # circuit's own energy. Shots have to scale with the CI space too.
+  shots: 10_000
+qsci:
+  # Scale the subspace with system size instead of a flat cap. A flat 170
+  # covered 100% of H4's CI space and 0.27% of H10's, so the energy error on
+  # the held-out molecule was dominated by subspace truncation rather than by
+  # circuit quality, and the reward meant something different on every
+  # molecule. 5% gives H8 and H10 comparable coverage; H4/H6 fall back to
+  # min_dim because 5% of their tiny spaces is a handful of determinants.
+  coverage: 0.05
+  max_dim: 4000     # ceiling, so H10 cannot demand an intractable diagonalisation
+  min_dim: 50

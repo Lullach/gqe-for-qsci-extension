@@ -284,6 +284,81 @@ singularity exec ~/images/cudaq_sandbox python3 hpc/analyze_xmol.py --group hcha
 zero-shot per held-out geometry, since H10 is evaluated at four bond lengths of
 differing difficulty.
 
+## Submission queue (prepared 2026-09-28)
+
+Everything below is config-complete and pushed. Submit in this order; each block
+is independent, so stop wherever the budget or the queue says to.
+
+```bash
+ssh abciq                      # keiomobile only -- eduroam is not on the allowlist
+cd ~/gqe-for-qsci && git pull && source hpc/env.local.sh
+```
+
+**0. Smoke (do this first, ~2 min).** L=15 is a new regime and the diffusion
+models have never run at that length:
+
+```bash
+qsub -W group_list=$ABCIQ_GROUP -l walltime=1:00:00 -v EXPERIMENT=archL15_diff_absorb,EXTRA="trainer.max_iters=2 trainer.num_samples=2 trainer.batch_size=2 trainer.warmup_size=2 trainer.buffer_size=2 trainer.step_per_epoch=1 exp_tag=archL15-smoke" hpc/jobs/train.sh
+```
+
+Check `qstat -xf <jobid> | grep Exit_status` before going further. It also
+produces the first `results.csv`, so confirm the file exists and has rows.
+
+**1. Architecture comparison, L=15** — 25 jobs, ~30-40 points. The main event.
+
+```bash
+for e in archL15_dag_gnn archL15_gpt2 archL15_diff_1shot archL15_diff_absorb archL15_diff_gnn; do
+  qsub -J 1-5 -r y -W group_list=$ABCIQ_GROUP -l walltime=12:00:00 -v EXPERIMENT=$e hpc/jobs/train.sh
+done
+```
+
+**2. Pointer action space** — 10 jobs, ~10 points. Built and GPU-smoke-tested,
+never run for real. `n2_pointer` has no CCSD at all (`ccsd_screening: false`);
+`n2_pool_matched` is the matched pool baseline.
+
+```bash
+qsub -J 1-5 -r y -W group_list=$ABCIQ_GROUP -l walltime=6:00:00 -v EXPERIMENT=n2_pointer hpc/jobs/train.sh
+qsub -J 1-5 -r y -W group_list=$ABCIQ_GROUP -l walltime=6:00:00 -v EXPERIMENT=n2_pool_matched hpc/jobs/train.sh
+```
+
+Caveat on reading these: single excitations still get the arbitrary
+`single_angle: 0.1`, because MP2 gives them zero by Brillouin's theorem. If the
+pointer underperforms, try `model.allow_singles=false` before concluding the
+action space is at fault.
+
+**3. L sweep** — 10 jobs, ~12 points. Completes a four-point curve with the
+existing L=10 baseline and the L=15 arm of block 1, all DAG GNN, all else equal.
+
+```bash
+qsub -J 1-5 -r y -W group_list=$ABCIQ_GROUP -l walltime=8:00:00 -v EXPERIMENT=Lsweep_dag_gnn_L12 hpc/jobs/train.sh
+qsub -J 1-5 -r y -W group_list=$ABCIQ_GROUP -l walltime=16:00:00 -v EXPERIMENT=Lsweep_dag_gnn_L20 hpc/jobs/train.sh
+```
+
+**4. Pauli-fragment ablation** — 5 jobs, ~5 points. The cheapest open question:
+does the policy benefit from the other Pauli fragments of each excitation?
+Differs from the existing 5-seed baseline in exactly one flag.
+
+```bash
+qsub -J 1-5 -r y -W group_list=$ABCIQ_GROUP -l walltime=12:00:00 -v EXPERIMENT=ablation_allpauli_h10 hpc/jobs/train.sh
+```
+
+### When they finish
+
+```bash
+qstat -w -x -a | grep qci10467lu | tail -30
+python3 hpc/plot_results.py --glob "outputs/gqe-for-qsci/*"
+```
+
+No W&B sync needed for the figures -- `plot_results.py` reads `results.csv`
+directly from the run directories. Sync only if you want the scalar curves in
+the web UI:
+
+```bash
+singularity exec ~/images/cudaq_sandbox wandb sync ~/gqe-for-qsci/outputs/gqe-for-qsci/*/wandb/offline-run-*
+```
+
+Total for all four blocks: 50 jobs, roughly 60-90 points of the ~1000 available.
+
 ## Architecture comparison at L=15, trained on H10
 
 Five policies, five seeds each, W&B group `arch-comparison-h10-L15`. Configs
