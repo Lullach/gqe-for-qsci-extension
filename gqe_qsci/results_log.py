@@ -11,7 +11,7 @@ data was SAVED, not of the plotting tool.
 So every evaluated circuit gets a row here, including its operator sequence. One
 file per run, `<output>/results.csv`, append-only:
 
-    exp_tag,model,seed,epoch,molecule,split,stage,sample_idx,energy,
+    exp_tag,model,n_params,seed,epoch,molecule,split,stage,sample_idx,energy,
     R-CASCI,R-CCSD,subspace_dim,num_sampled_basis,
     num_symmetry_preserving_basis,cx_count,total_gates,seq
 
@@ -36,7 +36,7 @@ import os
 _log = logging.getLogger(__name__)
 
 COLUMNS = [
-    "exp_tag", "model", "seed", "epoch",
+    "exp_tag", "model", "n_params", "seed", "epoch",
     "molecule", "split", "stage", "sample_idx",
     "energy", "R-CASCI", "R-CCSD",
     "subspace_dim", "num_sampled_basis", "num_symmetry_preserving_basis",
@@ -70,9 +70,14 @@ class ResultsWriter:
     cluster, where that is a normal way for a run to end.
     """
 
-    def __init__(self, path: str, *, exp_tag: str, model: str, seed):
+    def __init__(self, path: str, *, exp_tag: str, model: str, seed,
+                 n_params: int | None = None):
         self.path = path
-        self.context = {"exp_tag": exp_tag, "model": model, "seed": seed}
+        # n_params is recorded because an architecture comparison with unequal
+        # capacity is confounded: without it, "GPT-2 won" cannot be separated
+        # from "GPT-2 had 100x the parameters".
+        self.context = {"exp_tag": exp_tag, "model": model,
+                        "n_params": n_params, "seed": seed}
         self._ready = False
 
     def _open(self):
@@ -103,7 +108,8 @@ class ResultsWriter:
                     for idx, s in _iter_samples(entry["result"]):
                         writer.writerow([
                             self.context["exp_tag"], self.context["model"],
-                            self.context["seed"], int(epoch),
+                            self.context["n_params"], self.context["seed"],
+                            int(epoch),
                             molecule, split, stage, idx,
                             getattr(s, "energy", None),
                             refs.get("R-CASCI"), refs.get("R-CCSD"),

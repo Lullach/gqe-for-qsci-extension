@@ -186,6 +186,7 @@ class TrainPipeline(pl.LightningModule):
             exp_tag=str(self.config.exp_tag),
             model=target.rsplit(".", 1)[-1] or "unknown",
             seed=int(self.config.trainer.seed),
+            n_params=sum(p.numel() for p in self.model.parameters()),
         )
 
     @property

@@ -284,6 +284,62 @@ singularity exec ~/images/cudaq_sandbox python3 hpc/analyze_xmol.py --group hcha
 zero-shot per held-out geometry, since H10 is evaluated at four bond lengths of
 differing difficulty.
 
+## Architecture comparison at L=15, trained on H10
+
+Five policies, five seeds each, W&B group `arch-comparison-h10-L15`. Configs
+`archL15_dag_gnn`, `archL15_gpt2`, `archL15_diff_1shot`, `archL15_diff_absorb`,
+`archL15_diff_gnn` -- generated from `hchain_baseline_h10.yaml`, so ONLY the
+model and `ngates` differ.
+
+Two questions at once:
+
+1. **Does the stall survive more gates?** At L=10 the best-so-far metrics
+   flattened at step 143 of 540. A circuit of L gates can populate at most 2^L
+   determinants, so L=10 caps the circuit at 1,024 against H10's 3,175-slot
+   subspace; L=15 gives 32,768 and the ceiling stops binding. If it still stalls,
+   the cause is the exploration schedule, not expressivity.
+2. **Which architecture designs better circuits?**
+
+**Read n_params before concluding anything about (2).** The five models are not
+capacity-matched -- their established configs span ~437K parameters (DAG GNN) to
+~40M (GPT-2, whose `n_embd` defaults to 768). A ranking that tracks parameter
+count is a capacity result, not an architecture result. The column is in
+`results.csv` for this reason.
+
+### Run
+
+Smoke one model first -- L=15 is a new regime and the diffusion models have
+never run at that length:
+
+```bash
+qsub -W group_list=$ABCIQ_GROUP -l walltime=1:00:00 -v EXPERIMENT=archL15_diff_absorb,EXTRA="trainer.max_iters=2 trainer.num_samples=2 trainer.batch_size=2 trainer.warmup_size=2 trainer.buffer_size=2 trainer.step_per_epoch=1 exp_tag=archL15-smoke" hpc/jobs/train.sh
+```
+
+Then all five as job arrays (`-r y` is required; PBS refuses non-rerunnable
+arrays):
+
+```bash
+for e in archL15_dag_gnn archL15_gpt2 archL15_diff_1shot archL15_diff_absorb archL15_diff_gnn; do
+  qsub -J 1-5 -r y -W group_list=$ABCIQ_GROUP -l walltime=12:00:00 -v EXPERIMENT=$e hpc/jobs/train.sh
+done
+```
+
+25 jobs. At ~45 min for 540 epochs at L=10, expect 60-90 min each at L=15, so
+roughly 30-40 points of the ~1000 available.
+
+### Analyse
+
+No W&B panels needed -- every run writes `results.csv` with one row per
+evaluated circuit:
+
+```bash
+python3 hpc/plot_results.py --glob "outputs/gqe-for-qsci/archL15-*"
+```
+
+`final_by_model.pdf` is the comparison; `best_vs_epoch.pdf` answers the stall
+question; `sample_spread.pdf` shows whether exploration collapsed. Add a figure
+by writing a function and one line in `FIGURES` -- no resubmission.
+
 ## Docker on Windows
 
 CUDA-Q 0.12.0 is not available as a native Windows Python package, so the
