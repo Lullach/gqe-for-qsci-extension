@@ -2092,15 +2092,77 @@ Two caveats that must travel with those numbers:
    **GQE-optimized is the row that isolates the quantum contribution** (sampled
    determinants plus symmetry completion only), and its margin is the smaller one.
 
-### Why the first H-chain run looked strange
+### Subspace behaviour in the H-chain run (and a claim I got wrong)
 
-`Global-refined subspace_dim` hit the 3,175 cap by epoch ~20 and stayed flat for
-the remaining 520 epochs, while the raw subspace kept growing (150 -> 1,150
-through epoch 140). For 96% of training the headline metric was pinned at the cap
-and structurally could not reflect the policy improving. That is also why the
-refined error had ~0.02 mHa seed variance at some geometries while the raw error
-varied by tens of mHa: once refinement saturates, the final subspace is whatever
-refinement picks, nearly independent of the circuit that seeded it.
+**CORRECTION (2026-09-28).** An earlier version of this note claimed the refined
+energy was "nearly independent of the circuit that seeded it" because
+`Global-refined subspace_dim` saturated the 3,175 cap by epoch ~20. That does not
+follow, and the run contradicts it: the refined ENERGY kept improving well past
+epoch 20. Saturation fixes the subspace's SIZE, not its CONTENTS — a different
+circuit seeds refinement differently, refinement fills the same 3,175 slots from a
+different starting point, and the energy changes.
+
+What was actually observed is the **+/-0.02 mHa seed variance** at `r2.40` and
+`r3.00`, against +/-4.76 at `r1.10` and +/-5.42 at `r1.60`. Five seeds agreeing to
+0.02 mHa is odd, but there are at least two explanations and the data does not
+separate them:
+
+  (a) refinement converges to the same subspace whatever seeds it, or
+  (b) the five policies converged to similar circuits, and/or those geometries are
+      easy enough that many subspaces give the same energy.
+
+That it is geometry-dependent rather than universal is evidence for (b).
+
+**The test that separates them:** run the same global refinement seeded from
+RANDOM symmetry-conserving determinants instead of sampled ones, at the same cap.
+If random-seeded refinement also reaches 30.44 mHa on `r2.40`, refinement is doing
+the work. If it is much worse, the circuit matters and the low variance just means
+the policies converged. The machinery exists — `qsci/pipeline.py` for refinement,
+`qsci/baseline.py` for random determinant generation.
+
+### The real ceiling is L, not shots and not the cap
+
+Each gate is `exp(theta P)` with P a Pauli string, and a Pauli string maps a
+computational basis state to exactly one other basis state:
+
+    exp(theta P)|D> = cos(theta)|D> + i sin(theta) P|D>
+
+So every gate AT MOST DOUBLES the support. Starting from HF, a circuit of L gates
+can populate **at most 2^L determinants** — 1,024 at L=10.
+
+That fits the H10 baseline run: `num_sampled_basis` ~370 (under the bound, and
+well under because gates with small angles leave their new branch with tiny
+amplitude, so it is rarely sampled) and `GQE-optimized subspace_dim` ~1,150, which
+is those ~370 plus symmetry-completed partners.
+
+Consequences, all concrete:
+
+  - raising `shots` beyond what resolves ~2^L determinants buys nothing for the
+    RAW subspace;
+  - raising `qsci.coverage` beyond ~2^L can only be filled by CLASSICAL
+    refinement, not by the circuit;
+  - the binding constraint on the quantum contribution is **circuit length L**.
+
+**TODO: increase L soon.** Every experiment so far uses `ngates: 10`, inherited
+from the paper. At L=10 the circuit can seed at most ~1,024 of H10's 3,175-slot
+subspace, so most of the subspace is necessarily classical. If the thesis claim is
+that the quantum sampling selects good determinants, the circuit has to be able to
+reach enough of them. L=16 gives 2^16 = 65,536, i.e. more than H10's entire CI
+space, so somewhere in L = 12-16 is where the ceiling stops binding. Cost scales
+roughly linearly in L, so this is cheap. Do it as a sweep (L in 10, 12, 14, 16) on
+the H10 baseline, where a matched reference already exists over 5 seeds.
+
+### The policy stalled at 26% of training
+
+`GQE-optimized(best_so_far)/subspace_dim` flattened at ~1,150 at step 143 of 540,
+and `num_sampled_basis` at ~370 at the same point. These are BEST-SO-FAR metrics,
+so a plateau does not mean a ceiling was hit — it means **no better circuit was
+found after step 143**. The remaining ~400 epochs produced nothing.
+
+Worth chasing before spending more compute: is the temperature schedule annealing
+exploration to zero, has GRPO collapsed to a near-deterministic policy, or has the
+policy genuinely exhausted what L=10 can express (in which case see the L TODO
+above)?
 
 **Diagnostic to run first on any transfer result:** is the BASELINE near the HCI
 floor at its own subspace size? If the baseline is far above it, the policy is the
