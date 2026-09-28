@@ -636,8 +636,22 @@ class ExcitationPool(UCCSDBasedPool):
             coeff = g.parameter
             operator = None
             for p in g.generator.paulistrings:
-                term = convert_pauli_to_cudaq_spin(p)
-                operator = term if operator is None else (operator + term * p._coeff)
+                # EVERY term carries its own coefficient, including the first.
+                # This used to read
+                #     operator = term if operator is None else (operator + term * p._coeff)
+                # which added the first string UNSCALED. convert_pauli_to_cudaq_spin
+                # builds the Pauli word only and drops the coefficient, so nothing
+                # restored it. Measured on H2O: all eight strings of a double
+                # excitation carry +/-0.125, and the first was being built with
+                # weight 1.0 — 8x too large, and sign-flipped whenever that first
+                # coefficient was negative. The operator was therefore not the
+                # excitation generator it claimed to be.
+                #
+                # Never affected a result: no experiment config selects
+                # spec: excitation; everything so far used PauliEvolutionPool.
+                # See hpc/check_excitation_coeffs.py.
+                term = convert_pauli_to_cudaq_spin(p) * p._coeff
+                operator = term if operator is None else (operator + term)
             if self.params is None:
                 operator_pool.append(coeff * cudaq.SpinOperator(operator))
                 self._pool_amplitudes.append(float(coeff))

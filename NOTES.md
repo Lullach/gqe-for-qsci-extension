@@ -2117,7 +2117,7 @@ gate but is not UCCSD and has no clean physical reading.
 
 Not switched yet. Three things must be settled first.
 
-### BLOCKER: ExcitationPool's coefficient handling looks wrong
+### BLOCKER (CONFIRMED and FIXED 2026-09-28): ExcitationPool coefficients
 
 ```python
 operator = None
@@ -2133,10 +2133,15 @@ terms all have coefficients of equal magnitude (±1/8 for a double), the first t
 gets ~8x the weight of the others and loses its sign — the operator would not be
 the generator it claims to be.
 
-NOT yet confirmed: `p._coeff`'s actual contents were not inspected (needs tequila,
-i.e. the container). Verify before switching the default, because if it is a bug
-then `spec: excitation` has never produced a faithful generator and any historical
-result using it is suspect. Likely fix: scale every term including the first.
+CONFIRMED by `hpc/check_excitation_coeffs.py` on H2O. Every one of the eight
+Pauli strings of a double excitation carries +/-0.125, and the first was being
+built with weight 1.0 — 8x too large, and sign-flipped whenever that first
+coefficient happened to be negative. `spec: excitation` never produced a faithful
+generator.
+
+FIXED: every term is now scaled by its own coefficient. **No result was
+affected** — no experiment config selects `spec: excitation`; everything run so
+far used `PauliEvolutionPool`. The blocker on making it the default is cleared.
 
 ### Cost: excitation gates are ~8x deeper
 
