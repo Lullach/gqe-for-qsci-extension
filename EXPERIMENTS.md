@@ -32,6 +32,26 @@ again before any conclusion is drawn.
 | seeds | fixed set 1-5, as a PBS array (`qsub -J 1-5 -r y`) | every earlier result was single-seed, which is why comparisons were inconclusive |
 | `qsci.coverage` | 0.05 | subspace cap as a fraction of each molecule's CI space, so the reward means the same thing on every molecule |
 | `sampler.shots` | 10_000 | at 1k an N2 circuit sampled only 31 distinct determinants, so the raw subspace was sampling-limited |
+| operator action | **moving to full generators** | see below |
+
+**Change of direction (2026-09-28): what counts as one action.** Every result up
+to this date used `pauli_evolution` + `only_use_first_pauli: true`, where one
+action is ONE Pauli string of an excitation — a fragment, cheap (1 rotation) but
+not physically an excitation. The project is moving to **full excitation
+generators**: all Pauli strings, each with its JW coefficient, so one action is a
+genuine excitation. `ExcitationPool` had a bug that made this impossible (it
+dropped the first string's coefficient, giving that term 8x weight — fixed
+2026-09-28, and it had never been used by any experiment). The pointer policy
+follows the same switch: `make_excitation_operator` emits a fragment or a full
+generator according to `only_use_first_pauli`, so a pointer gate and a pool gate
+always mean the same thing.
+
+The defaults in `configs/default.yaml` are still `spec: pauli_evolution` and
+`only_use_first_pauli: true`, deliberately: flipping them makes every new run
+incomparable with every existing one, since an excitation gate compiles to ~8
+rotations against a fragment's 1. That comparison has to be matched by compiled
+gate count (`get_gate_count`), not by L.
+
 
 **Open decisions** are recorded in NOTES.md under "Pointer action space: open
 decisions" — `only_use_first_pauli`, the arbitrary angle given to single

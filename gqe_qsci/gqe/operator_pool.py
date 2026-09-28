@@ -269,23 +269,52 @@ class UCCSDBasedPool(OperatorPool, ABC):
         One cudaq operator for the excitation given as (virtual, occupied) index
         pairs — the form make_excitation_gate() expects.
 
-        Mirrors build_operator_pool's per-gate treatment: optionally strip the Z
-        ladder, convert the FIRST Pauli string, scale by the angle. Under
-        only_use_first_pauli (the default) a pool entry is already a single Pauli
-        fragment of an excitation, so returning one fragment here keeps a pointer
-        gate exactly as expensive as a pool gate and the comparison honest.
+        Mirrors whatever convention the pool itself uses, so a pointer gate and a
+        pool gate always mean the same thing:
+
+          only_use_first_pauli=True   one Pauli fragment, scaled by the angle.
+                                      Matches PauliEvolutionPool's default and
+                                      keeps a pointer gate exactly as expensive
+                                      as a pool gate.
+          only_use_first_pauli=False  the FULL generator: every Pauli string
+                                      scaled by its own JW coefficient, the sum
+                                      scaled by the angle. Physically faithful,
+                                      and ~8x deeper per gate for a double.
         """
         remove_z = getattr(self, "_remove_z_ladder", False)
+        first_only = getattr(self, "_only_use_first_pauli", True)
         circuit = self._tq_molecule().make_excitation_gate(
             indices=[tuple(p) for p in pairs], angle=angle
         )
+
+        operator = None
         for gate in circuit.gates:
             for pauli in gate.generator.paulistrings:
+                # Read the coefficient BEFORE any Z-stripping: stripping replaces
+                # the tequila PauliString with a plain dict, which has no _coeff.
+                weight = pauli._coeff
+                word = pauli
                 if remove_z:
-                    pauli = {k: v for k, v in pauli.items() if v.lower() != 'z'}
-                term = convert_pauli_to_cudaq_spin(pauli)
-                return angle * cudaq.SpinOperator(term)
-        raise ValueError(f"excitation {pairs} produced no Pauli terms")
+                    word = {k: v for k, v in pauli.items() if v.lower() != 'z'}
+                term = convert_pauli_to_cudaq_spin(word)
+
+                if first_only:
+                    # Fragment convention: one Pauli rotation per gate, matching
+                    # PauliEvolutionPool + only_use_first_pauli, which likewise
+                    # scales by the amplitude alone and drops the JW weight.
+                    return angle * cudaq.SpinOperator(term)
+
+                scaled = term * weight
+                operator = scaled if operator is None else (operator + scaled)
+
+        if operator is None:
+            raise ValueError(f"excitation {pairs} produced no Pauli terms")
+        # Full-generator convention: every term scaled by its own JW coefficient,
+        # the whole sum by the rotation angle — the same recipe as
+        # ExcitationPool.build_operator_pool, so a pointer gate and a pool gate
+        # mean the same thing. The terms mutually commute, so the sampler applying
+        # them as separate exp_pauli calls reproduces exp(angle * generator).
+        return angle * cudaq.SpinOperator(operator)
 
     def ensure_excitation(self, key, pairs, angle: float | None = None,
                           single_angle: float = 0.1) -> int:
@@ -622,6 +651,11 @@ class ExcitationPool(UCCSDBasedPool):
         return len(self.pool)
 
     def build_operator_pool(self, threshold, dedup_excitations=False, ccsd_screening=True):
+        # This pool is full-generator by definition, so make_excitation_operator()
+        # builds full generators too. Set before any early return.
+        self._remove_z_ladder = False
+        self._only_use_first_pauli = False
+
         if not ccsd_screening:      # see PauliEvolutionPool for the rationale
             self._pool_amplitudes = [0.0]
             return [self.get_identity_operator()]
