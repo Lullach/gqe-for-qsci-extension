@@ -307,36 +307,135 @@ edge_srcs/dsts = [] []
 
 Each step: `_step_forward` → `_scaled_logits` → sample → `_advance_dag`.
 
+In the diagrams below, **orange** marks the current frontier — the nodes that get
+pooled into the query for the *next* gate — and **blue** the gate just placed.
+A freshly placed gate is always in the frontier too (it just overwrote the
+frontier of every wire it touched); blue simply takes precedence in the drawing.
+An edge labelled `×2` is stored **twice**, not once. Unplaced slots are isolated
+nodes with no edges, so they never reach the pooling and are left out. Edges are
+stored directed (`frontier[q] → gate`) and symmetrized inside `_pool_frontier`,
+so the GAT sees both directions.
+
+**Start.** Every wire points at itself; no gate slots are filled.
+
+```mermaid
+flowchart LR
+  q0((q0)):::f
+  q1((q1)):::f
+  q2((q2)):::f
+  q3((q3)):::f
+  q4((q4)):::f
+  q5((q5)):::f
+  classDef f stroke:#e8590c,stroke-width:3px
+```
+
 **Step 0** (`gate_node = 6`). `edge_index` is empty, so the GAT layers are
 **skipped entirely** and `pooled` is just the mean of the raw wire embeddings.
 The first gate is chosen with no structural information, only orbital physics.
-Sample → **op 3**. `_advance_dag` sets `node_tokens[6] = 6+3 = 9` and, for each
-$q \in \{0,1,4,5\}$, adds edge `frontier[q]→6` and sets `frontier[q] = 6`:
+Sample → **op 3**, footprint $\{0,1,4,5\}$. `_advance_dag` sets
+`node_tokens[6] = 6+3 = 9` and, for each $q$ in the footprint, adds edge
+`frontier[q]→6` and sets `frontier[q] = 6`.
 
+```mermaid
+flowchart LR
+  q0((q0)) --> g6
+  q1((q1)) --> g6
+  q4((q4)) --> g6
+  q5((q5)) --> g6
+  q2((q2)):::f
+  q3((q3)):::f
+  g6["slot 6 · op 3<br/>{0,1,4,5}"]:::n
+  classDef f stroke:#e8590c,stroke-width:3px
+  classDef n stroke:#1971c2,stroke-width:3px
 ```
-edges    (0->6)(1->6)(4->6)(5->6)
-frontier [6,6,2,3,6,6]
-```
 
-**Step 1** (`gate_node = 7`). Two subtleties bite:
+`frontier [6,6,2,3,6,6]` — four of the six wires now point at the same node.
 
-- `frontier` gathers node 6 **four times**, so it dominates the mean pooling —
+**Step 1** (`gate_node = 7`). Sample → **op 1**, footprint $\{0,1,2,3\}$. Two
+subtleties bite here:
+
+- The frontier gathers node 6 **four times**, so it dominates the mean pooling —
   wide gates get implicitly upweighted.
-- Sample → **op 1**, footprint `[0,1,2,3]`; qubits 0 and 1 share frontier 6, so
-  edge `6→7` is appended **twice**. Parallel edges are kept, so the GAT
-  aggregates that neighbour twice.
+- Qubits 0 and 1 *both* have frontier 6, so edge `6→7` is appended **twice**.
+  Parallel edges are kept, so the GAT aggregates that neighbour twice.
 
-```
-edges  += (6->7)(6->7)(2->7)(3->7)
-frontier [7,7,7,7,6,6]
+```mermaid
+flowchart LR
+  q0((q0)) --> g6
+  q1((q1)) --> g6
+  q4((q4)) --> g6
+  q5((q5)) --> g6
+  g6["slot 6 · op 3"]:::f
+  g6 -- "×2" --> g7
+  q2((q2)) --> g7
+  q3((q3)) --> g7
+  g7["slot 7 · op 1<br/>{0,1,2,3}"]:::n
+  classDef f stroke:#e8590c,stroke-width:3px
+  classDef n stroke:#1971c2,stroke-width:3px
 ```
 
-**Step 2** → op 5, fp `[1,3]`: `edges += (7->8)(7->8)`, `frontier [7,8,7,8,6,6]`.
-**Step 3** → op 2, fp `[2,3,4,5]`: `edges += (7->9)(8->9)(6->9)(6->9)`,
+`frontier [7,7,7,7,6,6]` — node 6 is still the frontier of wires 4 and 5, which
+op 1 did not touch.
+
+**Step 2** (`gate_node = 8`). Sample → **op 5**, footprint $\{1,3\}$. Both wires
+have frontier 7, so `7→8` is again a double edge — and this gate touches only
+two wires, so most of the frontier is untouched.
+
+```mermaid
+flowchart LR
+  q0((q0)) --> g6
+  q1((q1)) --> g6
+  q4((q4)) --> g6
+  q5((q5)) --> g6
+  g6["slot 6 · op 3"]:::f
+  g6 -- "×2" --> g7
+  q2((q2)) --> g7
+  q3((q3)) --> g7
+  g7["slot 7 · op 1"]:::f
+  g7 -- "×2" --> g8
+  g8["slot 8 · op 5<br/>{1,3}"]:::n
+  classDef f stroke:#e8590c,stroke-width:3px
+  classDef n stroke:#1971c2,stroke-width:3px
+```
+
+`frontier [7,8,7,8,6,6]` — three distinct nodes now, one per "layer" of the
+circuit that is still exposed.
+
+**Step 3** (`gate_node = 9`). Sample → **op 2**, footprint $\{2,3,4,5\}$, whose
+wires sit at frontiers 7, 8, 6 and 6 — so this gate wires into **all three**
+exposed nodes at once, with `6→9` doubled.
+
+```mermaid
+flowchart LR
+  q0((q0)) --> g6
+  q1((q1)) --> g6
+  q4((q4)) --> g6
+  q5((q5)) --> g6
+  g6["slot 6 · op 3"]
+  g6 -- "×2" --> g7
+  q2((q2)) --> g7
+  q3((q3)) --> g7
+  g7["slot 7 · op 1"]:::f
+  g7 -- "×2" --> g8
+  g8["slot 8 · op 5"]:::f
+  g7 --> g9
+  g8 --> g9
+  g6 -- "×2" --> g9
+  g9["slot 9 · op 2<br/>{2,3,4,5}"]:::n
+  classDef f stroke:#e8590c,stroke-width:3px
+  classDef n stroke:#1971c2,stroke-width:3px
+```
+
 `frontier [7,8,9,9,9,9]`.
 
 Final: `node_tokens = [0,1,2,3,4,5, 9,7,11,8]`, sequence `[3,1,5,2]`, so
 `state["idx"] = [0,3,1,5,2]`.
+
+Reading the four snapshots together, the structural point is that the graph is
+**not** a chain: gate 9 sees gates 6, 7 and 8 directly, because the wires it
+touches were last written by three different gates. That is the whole reason for
+a GNN rather than a sequence model here — "what has already happened on *my*
+qubits" is a neighbourhood in this graph, not a suffix of the token sequence.
 
 ### 2.3 Canonical masking (`canonical_masking: true`)
 
