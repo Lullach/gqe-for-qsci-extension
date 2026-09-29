@@ -216,15 +216,15 @@ def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
             "pyci's determinant order does not match its coefficient order."
         )
 
-    check = diagonalize(pyci_ham, dets, nelec, max_cycle)
-    if abs(check - fci_energy) > 1e-8:
-        raise RuntimeError(
-            f"oracle self-check failed: re-diagonalizing all {len(dets)} "
-            f"extracted determinants gave {check:.10f}, full CI is "
-            f"{fci_energy:.10f}. The determinant extraction is wrong, so any "
-            "oracle curve from it would be meaningless."
-        )
-
+    if selfcheck:
+        # Re-diagonalizing over ALL determinants must reproduce full CI. This
+        # is a SECOND full solve, so it is skippable for large spaces once the
+        # same code path has been verified on a small one.
+        check = diagonalize(pyci_ham, dets, nelec, max_cycle)
+        if abs(check - fci_energy) > 1e-8:
+            raise RuntimeError(
+                f"self-check failed: all-determinant diagonalization gave "
+                f"{check:.10f}, full CI is {fci_energy:.10f}; extraction is wrong.")
     order = np.argsort(-c)                 # most important determinant first
     curve = []
     for n in dims:
@@ -234,7 +234,7 @@ def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
     return curve, fci_energy
 
 
-def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000):
+def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000, selfcheck=True):
     """(determinants sorted by |c| descending, fci_energy). Shared setup."""
     wfn = pyci.fullci_wfn(pyci_ham.nbasis, *nelec)
     wfn.add_all_dets()
@@ -259,7 +259,7 @@ def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000):
 
 
 def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
-                     progress=None):
+                     progress=None, selfcheck=True):
     """
     Smallest top-|c| subspace whose energy is within `target_mha` of full CI.
 
@@ -273,7 +273,7 @@ def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
     QSCI regardless, because |c|^2-distributed sampling is precisely what QSCI
     does — this is the subspace size QSCI would need in the best case.
     """
-    ordered, fci_energy = _full_ci_ordered(pyci_ham, nelec, max_cycle)
+    ordered, fci_energy = _full_ci_ordered(pyci_ham, nelec, max_cycle, selfcheck)
     n_fci = len(ordered)
 
     def err_mha(n):
