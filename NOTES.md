@@ -407,7 +407,8 @@ averaged over all T timesteps, using corruption masks pre-sampled by
 log-probability of the reverse trajectory that was actually sampled**:
 
 ```
-log p_θ(τ) = Σ_t Σ_{i committed at t} log p_θ(x_0[i] | x_t, t)
+log p_θ(τ) = log(q(τ)) + Σ_t Σ_{i committed at t} log p_θ(x_0[i] | x_t, t)
+(q term cancels afterwards)
 ```
 
 `sample_sequence` records `state["reveal_step"]` — (B, L) long, the timestep at
@@ -2324,3 +2325,72 @@ pool-run clip settings transfer.
 **Order.** Run `n2_pointer` vs `n2_pool_matched` first. Port only if pointers
 win or draw — a draw is already a result, since it removes CCSD from the loop.
 GPT-2 before diffusion: less work, and it is the paper's baseline architecture.
+
+## Open threads as of 2026-09-29 (read this first after a break)
+
+### In flight
+
+Four `hpc/jobs/subspace.sh` jobs on rt_QC: `h12`, `c2h2`, `co2`, `n2b`, one per
+family, each writing `subspace_<family>.csv`. When they land:
+
+```bash
+qstat -w -x -a | grep qci10467lu | tail
+# copy the CSVs off the cluster, then, with matplotlib:
+python hpc/plot_subspace_requirement.py --csv "subspace*.csv"
+```
+
+`c2h2` is the one to read first: identical CI dimension to H10 (63,504) but
+completely different bonding, so it separates size from chemistry. `n2b` is N2
+in 6-31G — same chemistry, bigger space. `h12` is the risk (853,776 dets, ~1e9
+sparse nonzeros); if it hits the 24 h walltime just resubmit, finished
+configurations are skipped.
+
+### The finding that should drive the next decision
+
+**The H10 experiment was capped, not policy-limited.** The 181-configuration
+laptop scan says H10 needs a MEDIAN of 15.9% of its CI space for chemical
+accuracy; the runs used `coverage: 0.05`. So for half the H10 geometries no
+policy could have reached 1.6 mHa, which is exactly why all five architectures,
+all circuit lengths and both Pauli conventions piled up at ~30 mHa.
+
+Two further results from that scan:
+
+  * **Chemistry dominates size.** At an identical 4,900-determinant space, LiF
+    needs 1.3% (median) and H8 needs 21.6% — a 17x spread at fixed dimension.
+    "How big is the system" is the wrong question; "how multireference is it" is
+    the right one.
+  * **Difficulty is non-monotonic in bond length.** `h10_r2.50` needs 35.4%,
+    `h10_r3.10` needs 0.59%. Near dissociation the chain localises into weakly
+    coupled atoms and gets easy again, so the hard regime is INTERMEDIATE
+    stretch. Relevant to choosing benchmark geometries — 2.5 A is near the worst
+    case, which is worth saying out loud in the thesis.
+
+### Open decisions
+
+1. **Singles angle** (pointer). MP2 gives singles exactly zero by Brillouin, so
+   `single_angle: 0.1` is arbitrary. Options: `allow_singles: false` (already
+   implemented), a learned angle as a fifth pointer step, or CCSD t1 for singles
+   only (reintroduces the dependence just removed).
+2. **Flip the default to `spec: excitation`?** The ExcitationPool coefficient bug
+   is fixed; what remains is that an excitation gate is ~8x deeper, so the
+   comparison must be matched by compiled gate count, not by L. Also the ABSOLUTE
+   angle convention is unverified (tequila's `angle = 2t` against CUDA-Q's
+   `exp_pauli`); check a single-gate circuit against a classical application
+   before trusting it.
+
+### Known gaps
+
+  * **Pointer loses badly on N2**: 8.34 +/- 1.95 mHa refined against the pool
+    baseline's 1.27 +/- 0.19. The raw gap is only 1.3x but the refined gap is
+    6.6x, so its circuits seed the classical refinement far worse. Untested
+    hypothesis: the arbitrary singles angle. Next action is a re-run with
+    `model.allow_singles=false` before blaming the action space.
+  * **The allpauli ablation has no matched comparator.** It ran at L=10 and the
+    original L=10 baseline predates `results_log.py`, so it has no `results.csv`.
+    Re-running `hchain_baseline_h10` for 5 seeds (~5 points) would fix it.
+  * **Diffusion models stall early.** Last gain at 21% (absorbing) and 36%
+    (single-shot) of the run, against 69-76% for the DAG GNN and GPT-2 at L=15.
+    Unexplained.
+  * **The oracle is an UPPER bound, not a floor** — top-|c| is overlap-optimal,
+    not energy-optimal. Already corrected in the section above; do not let the
+    "no method can beat this" phrasing creep back.
