@@ -28,12 +28,43 @@ from collections import defaultdict
 CHEMICAL_ACCURACY_MHA = 1.6
 
 
+# The writer's columns changed while the first scan was running, so a CSV can
+# hold more than one layout. Keyed by field count; the label is always
+# "<family>_r<bond length>", so family and bond_length are recoverable even from
+# the oldest rows.
+SCHEMAS = {
+    12: ["config", "basis", "nelecas", "norbcas", "qubits", "n_fci", "n_needed",
+         "fraction", "err_mha", "target_mha", "fci_energy", "seconds"],
+    15: ["config", "family", "atoms", "bond_length", "basis", "nelecas",
+         "norbcas", "qubits", "n_fci", "n_needed", "fraction", "err_mha",
+         "target_mha", "fci_energy", "seconds"],
+    16: ["config", "family", "atoms", "bond_length", "basis", "nelecas",
+         "norbcas", "qubits", "n_fci", "n_needed", "fraction", "err_mha",
+         "target_mha", "fci_energy", "selfchecked", "seconds"],
+}
+
+
 def load(path):
     if not os.path.exists(path):
         sys.exit(f"{path} not found -- run hpc/subspace_requirement.py first.")
-    rows = []
+
+    rows, skipped = [], defaultdict(int)
     with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
+        for raw in csv.reader(f):
+            if not raw or raw[0] in ("config", "system"):
+                continue                                  # header, any version
+            fields = SCHEMAS.get(len(raw))
+            if fields is None:
+                skipped[f"unknown layout ({len(raw)} fields)"] += 1
+                continue
+            row = dict(zip(fields, raw))
+
+            # family / bond length are recoverable from the label in every layout
+            label = row.get("config", "")
+            if "_r" in label:
+                fam, _, blen = label.rpartition("_r")
+                row.setdefault("family", fam)
+                row.setdefault("bond_length", blen)
             try:
                 row["fraction"] = float(row["fraction"])
                 row["pct"] = 100.0 * row["fraction"]
@@ -41,15 +72,30 @@ def load(path):
                 row["n_fci"] = int(row["n_fci"])
                 row["n_needed"] = int(row["n_needed"])
                 row["qubits"] = int(row["qubits"])
-            except (KeyError, ValueError, TypeError):
+            except (KeyError, ValueError, TypeError) as exc:
+                skipped[f"{type(exc).__name__}: {exc}"] += 1
                 continue
             rows.append(row)
+
+    if skipped:
+        print("skipped rows:")
+        for reason, n in sorted(skipped.items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>4}  {reason}")
     if not rows:
-        sys.exit(f"{path} has no usable rows.")
+        sys.exit(f"{path} produced no usable rows (see the reasons above).")
+
+    # a label can appear under two layouts if a scan was rerun; keep the last
+    dedup = {r["config"]: r for r in rows}
+    if len(dedup) != len(rows):
+        print(f"note: {len(rows) - len(dedup)} duplicate config label(s); kept the last")
+    rows = list(dedup.values())
+
     fams = sorted({r["family"] for r in rows})
+    layouts = sorted({len(SCHEMAS)} )   # informational only
     print(f"loaded {len(rows)} configuration(s), {len(fams)} famil(ies): "
           f"{', '.join(fams)}")
     return rows
+
 
 
 def _colors(plt, families):
