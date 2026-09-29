@@ -82,7 +82,7 @@ $$q(x_t | x_0): \text{each token masked with prob } (1 - \alpha_t), \quad \alpha
 
 The reverse process uses the exact closed-form posterior $q(x_{t-1} | x_t, \hat{x}_0)$, revealing masked positions progressively from $t = T$ down to $t = 1$.
 
-**log_prob.** The **exact log-probability of the sampled reverse trajectory** (DDPO-style, [Black et al., 2023](https://arxiv.org/abs/2305.13301); cf. [DPOK, Fan et al., 2023](https://arxiv.org/abs/2305.16381)):
+**log_prob.** The **exact log-probability of the sampled reverse trajectory** ($\text{DDPO}_\text{IS}$, [Black et al., 2023](https://arxiv.org/abs/2305.13301) §4.3; cf. [DPOK, Fan et al., 2023](https://arxiv.org/abs/2305.16381)):
 
 $$\log p(\tau) = \log q(\tau) + \sum_t \sum_{i \text{ committed at } t} \log p_\theta(x_0^i \mid x_t, t)$$
 

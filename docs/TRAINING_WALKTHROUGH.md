@@ -155,7 +155,12 @@ energies = [-107.20, -107.44, -107.31, -107.15]   # Ha; circuit 1 is best
 
 This is the DDPO formulation — score the denoising trajectory as the action
 sequence of a policy ([Black et al., 2023](https://arxiv.org/abs/2305.13301); cf.
-DPOK, [Fan et al., 2023](https://arxiv.org/abs/2305.16381)).
+DPOK, [Fan et al., 2023](https://arxiv.org/abs/2305.16381)). Specifically the
+**importance-sampled variant, $\text{DDPO}_\text{IS}$** (their §4.3), not
+$\text{DDPO}_\text{SF}$: the score-function estimator "only allows for one step
+of optimization per round of data collection," and we take `step_per_epoch` = 30
+steps on one frozen rollout group. See §3 for where our version departs from
+theirs.
 
 The trajectory is $\tau = (x_T, x_{T-1}, \ldots, x_0)$, the sequence of
 partially-masked states the reverse process passed through. Write $C_t$ for the
@@ -371,6 +376,21 @@ $\log p_\text{new} = \log p_\text{old}$ exactly, so every ratio is 1 and the PPO
 term contributes nothing. As weights move the ratios fan out; over 30 real steps
 they reach the clip bounds, and the clip stops one rollout group from moving the
 policy too far.
+
+**How this differs from $\text{DDPO}_\text{IS}$ as published**, worth stating
+before citing it:
+
+| | Black et al. §4.3 | here |
+|---|---|---|
+| ratio granularity | one per denoising timestep, over the whole transition $p_\theta(x_{t-1} \mid x_t)$ | one per **position** — `log_prob` returns $(B, L)$ and the ratio is elementwise |
+| reward weighting | $r(x_0, c)$ directly | group-relative advantage $(\bar{E} - E)/\mathrm{std}$ (GRPO) |
+| extra term | — | NLL on the winner (unattributable, above) |
+
+The granularity difference is not cosmetic. A step committing $k$ gates yields
+$k$ separately-clipped ratios instead of one ratio of their product, so each
+token is held inside $[0.8, 1.28]$ while the joint step may move by up to
+$1.28^{\,k}$. That is the GRPO/LLM per-token convention rather than DDPO's
+per-step one; both are defensible, but the trust region is not the same object.
 
 One caveat carried over from the ELBO switch: the trajectory log-prob sums over
 $L$ instead of averaging over $T$, so its **scale differs from the old ELBO
@@ -593,8 +613,11 @@ Every arXiv identifier below was checked against the listing page, not recalled.
 - K. Black, M. Janner, Y. Du, I. Kostrikov, S. Levine, "Training Diffusion Models
   with Reinforcement Learning,"
   [arXiv:2305.13301](https://arxiv.org/abs/2305.13301) (2023). DDPO — scoring the
-  denoising trajectory as a policy's action sequence, which is what §1.3
-  implements.
+  denoising trajectory as a policy's action sequence. §1.3 implements the
+  importance-sampled estimator $\text{DDPO}_\text{IS}$ of their §4.3 (the one
+  that permits several optimization steps per round of data collection), with
+  the two deviations tabulated in §3, not the score-function
+  $\text{DDPO}_\text{SF}$.
 - Y. Fan, O. Watkins, Y. Du, *et al.*, "DPOK: Reinforcement Learning for
   Fine-tuning Text-to-Image Diffusion Models,"
   [arXiv:2305.16381](https://arxiv.org/abs/2305.16381) (NeurIPS 2023). The other
