@@ -425,18 +425,29 @@ nothing; as the weights move they fan out, and over 30 real steps they reach the
 clip bounds, which is what stops one rollout group from moving the policy too
 far.
 
-> **One wrinkle the toy table hides.** It was produced with $\beta$ held fixed,
-> so step 1 gives exactly $1.0000$. A real run does not: `collect_rollout` scores
-> `old_log_probs` at the current $\beta$ and *then* calls
-> `scheduler.update()` ([train_pipeline.py:468](../gqe_qsci/train_pipeline.py)),
-> so all 30 gradient steps use $\beta + \delta$ ($\delta = 0.02$ by default).
-> Since $\partial \log p_i / \partial \beta = \mathbb{E}_p[z] - z_i$ and a
-> *sampled* token usually sits below the mean pseudo-energy, this offsets step 1
-> slightly and systematically **above** 1 — annealing, not learning, consuming a
-> sliver of the clip budget at the start of every epoch. It is still correct
-> importance sampling (the behavior policy really was the old $\beta$), just not
-> the clean $r = 1$ the table suggests. Unquantified in a real run; worth a look
-> at the logged ratio spread if the clip ever appears to bite early.
+> **One wrinkle the toy table hides — examined, and deliberately left alone.**
+> The table was produced with $\beta$ held fixed, so step 1 gives exactly
+> $1.0000$. A real run does not: `collect_rollout` scores `old_log_probs` at the
+> current $\beta$ and *then* calls `scheduler.update()`
+> ([train_pipeline.py:468](../gqe_qsci/train_pipeline.py)), so **all 30** gradient
+> steps compare against a behavior policy at $\beta$ while evaluating at
+> $\beta + \delta$ ($\delta = 0.02$, i.e. 4% at the start of training). Since
+> $\partial \log p_i / \partial \beta = \mathbb{E}_p[z] - z_i$ and a *sampled*
+> token usually sits below the mean pseudo-energy, every ratio is shifted
+> systematically **above** 1 — annealing showing up as if it were policy
+> improvement. It is a constant offset across the epoch, not a step-1 transient.
+>
+> Why it is nonetheless close to harmless: advantages are mean-centered
+> ($\sum_b A_b = 0$ exactly), so a *uniform* multiplicative offset contributes
+> $c \cdot \frac{1}{B}\sum_b A_b = 0$ to $\overline{rA}$ and cancels. What
+> survives is only the per-sample variation of the offset — which may correlate
+> with $A$, since circuits the model already favors have both larger margins and
+> plausibly lower energies — and the clip's nonlinearity. It also remains correct
+> importance sampling: the behavior policy really was the old $\beta$.
+>
+> The cancellation is what makes this safe to ignore, and it **fails once ratios
+> reach the clip bound**, because clipping is not linear. So: revisit only if the
+> logged ratio spread starts hitting $1.28$ early in an epoch.
 
 **How this differs from $\text{DDPO}_\text{IS}$ as published**, worth stating
 before citing it:
