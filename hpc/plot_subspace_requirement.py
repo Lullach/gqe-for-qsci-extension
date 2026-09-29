@@ -21,6 +21,7 @@ Needs matplotlib, so run it wherever you have it (not the ABCI-Q container).
 
 import argparse
 import csv
+import glob
 import os
 import sys
 from collections import defaultdict
@@ -44,13 +45,23 @@ SCHEMAS = {
 }
 
 
-def load(path):
-    if not os.path.exists(path):
-        sys.exit(f"{path} not found -- run hpc/subspace_requirement.py first.")
+def load(pattern):
+    """
+    Load one CSV or a glob of them. The cluster writes one file per family
+    (concurrent appends to a shared file would interleave rows mid-line), so
+    merging here is the normal case, not a special one.
+    """
+    paths = sorted(glob.glob(pattern)) or ([pattern] if os.path.exists(pattern) else [])
+    if not paths:
+        sys.exit(f"no CSV matched {pattern!r} -- run hpc/subspace_requirement.py first.")
 
     rows, skipped = [], defaultdict(int)
-    with open(path, newline="", encoding="utf-8") as f:
-        for raw in csv.reader(f):
+    raw_lines = []
+    for path in paths:
+        with open(path, newline="", encoding="utf-8") as f:
+            raw_lines.extend(csv.reader(f))
+    if True:
+        for raw in raw_lines:
             if not raw or raw[0] in ("config", "system"):
                 continue                                  # header, any version
             fields = SCHEMAS.get(len(raw))
@@ -91,9 +102,8 @@ def load(path):
     rows = list(dedup.values())
 
     fams = sorted({r["family"] for r in rows})
-    layouts = sorted({len(SCHEMAS)} )   # informational only
-    print(f"loaded {len(rows)} configuration(s), {len(fams)} famil(ies): "
-          f"{', '.join(fams)}")
+    print(f"loaded {len(rows)} configuration(s) from {len(paths)} file(s), "
+          f"{len(fams)} famil(ies): {', '.join(fams)}")
     return rows
 
 
@@ -174,7 +184,9 @@ def fig_ci_dimension(rows, plt, colors, path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="subspace_requirement.csv")
+    ap.add_argument("--csv", default="subspace_*.csv",
+                    help="one CSV or a glob; the cluster writes one "
+                         "file per family, so a glob is normal")
     ap.add_argument("--out", default="figures")
     args = ap.parse_args()
 
