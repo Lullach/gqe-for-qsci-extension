@@ -3,47 +3,65 @@ Summaries and figures from the per-circuit CSVs, without re-running anything.
 
 Every run writes `<output>/results.csv`, one row per evaluated circuit (see
 gqe_qsci/results_log.py). This globs them together and either prints a text
-summary or draws the default figures.
+summary or draws figures.
 
-DEPENDENCIES, deliberately minimal: loading and `--summary` use only the
-standard library, because the ABCI-Q container has numpy/scipy/torch but NOT
-pandas or matplotlib, and rebuilding it just to read a CSV would be absurd.
-Figures need matplotlib, so draw those on your laptop — copy the CSVs over, or
-`--merge` them into one file first.
+TWO GROUPINGS MATTER, and getting either wrong silently averages unrelated runs:
 
-    # on the cluster (no extra deps):
+  family   the exp_tag minus its -s<seed> suffix. Grouping by `model` is wrong:
+           CircuitDAGGNNPolicy covers archL15-dag-gnn, L12-dag-gnn, L20-dag-gnn
+           and allpauli-h10 -- four different experiments.
+  molecule identified by the CASCI reference, because single-molecule runs all
+           log molecule="target" and that cannot tell H10 (-4.9237) from N2
+           (-107.44). Runs with different references never share an axis; their
+           errors are not comparable.
+
+DEPENDENCIES are deliberately minimal: loading, `--summary` and `--merge` use
+only the standard library, because the ABCI-Q container has numpy/scipy/torch
+but NOT pandas or matplotlib. Only figures need matplotlib.
+
+    # on the cluster:
     python3 hpc/plot_results.py --summary
     python3 hpc/plot_results.py --merge merged.csv
 
-    # on your laptop (matplotlib available):
-    python3 hpc/plot_results.py --glob "outputs/gqe-for-qsci/archL15-*"
+    # anywhere with matplotlib:
+    python3 hpc/plot_results.py --glob merged.csv --out figures/
 
 Columns: exp_tag, model, n_params, seed, epoch, molecule, split, stage,
 sample_idx, energy, R-CASCI, R-CCSD, subspace_dim, num_sampled_basis,
 num_symmetry_preserving_basis, cx_count, total_gates, seq.
-
-`stage` is "GQE-optimized" for every sampled circuit of a rollout
-(sample_idx >= 0) and "<...>(best_so_far)" for the running bests
-(sample_idx == -1). Errors are not precomputed: the reference energies are
-columns, so pick your own convention.
 """
 
 import argparse
 import csv
 import glob
 import os
+import re
 import statistics as stats
 import sys
 from collections import defaultdict
 
 HA_TO_MHA = 1000.0
 CHEMICAL_ACCURACY_MHA = 1.6
+STAGES = ["GQE-optimized(best_so_far)", "Global-refined(best_so_far)"]
 
 NUMERIC = {
     "n_params", "seed", "epoch", "sample_idx", "energy", "R-CASCI", "R-CCSD",
     "subspace_dim", "num_sampled_basis", "num_symmetry_preserving_basis",
     "cx_count", "total_gates",
 }
+
+SEED_SUFFIX = re.compile(r"-s\d+$")
+
+
+def family(row):
+    """exp_tag without its -s<seed> suffix: the unit a sweep varies."""
+    return SEED_SUFFIX.sub("", row.get("exp_tag") or "")
+
+
+def molecule_key(row):
+    """The system, identified by its CASCI reference (see module docstring)."""
+    ref = row.get("R-CASCI")
+    return round(ref, 3) if ref is not None else None
 
 
 def _num(value):
@@ -57,7 +75,6 @@ def _num(value):
 
 
 def load_rows(pattern):
-    """List of dicts, stdlib only. Adds err_mha where a CASCI reference exists."""
     paths = sorted(glob.glob(os.path.join(pattern, "results.csv")))
     if not paths:
         paths = [p for p in sorted(glob.glob(pattern)) if p.endswith(".csv")]
@@ -73,198 +90,219 @@ def load_rows(pattern):
                     if k in row:
                         row[k] = _num(row[k])
                 row["run_dir"] = os.path.dirname(path)
-                if row.get("energy") is not None and row.get("R-CASCI") is not None:
-                    row["err_mha"] = (row["energy"] - row["R-CASCI"]) * HA_TO_MHA
-                else:
-                    row["err_mha"] = None
+                e, ref = row.get("energy"), row.get("R-CASCI")
+                row["err_mha"] = (e - ref) * HA_TO_MHA if (e is not None and ref is not None) else None
                 rows.append(row)
 
-    tags = {r["exp_tag"] for r in rows}
-    models = {r["model"] for r in rows}
-    print(f"loaded {len(paths)} run(s), {len(rows):,} rows, "
-          f"{len(tags)} exp_tag(s), {len(models)} model(s)")
+    print(f"loaded {len(paths)} file(s), {len(rows):,} rows, "
+          f"{len({r['exp_tag'] for r in rows})} run(s), "
+          f"{len({family(r) for r in rows})} famil(ies)")
     return rows
 
 
-def group_mean(rows, key_fields, value_field):
-    """{key tuple: {x: mean over rows}} — the one bit of pandas actually used."""
-    buckets = defaultdict(lambda: defaultdict(list))
+# --------------------------------------------------------------------------
+# text summary - standard library only
+# --------------------------------------------------------------------------
+
+def _final_per_seed(rows, stage):
+    """{family: [final error, one per seed]}"""
+    latest = {}
     for r in rows:
-        v = r.get(value_field)
-        x = r.get("epoch")
-        if v is None or x is None:
+        if r["stage"] != stage or r["err_mha"] is None:
             continue
-        buckets[tuple(r.get(k) for k in key_fields)][x].append(v)
-    return {
-        key: {x: stats.mean(vs) for x, vs in sorted(series.items())}
-        for key, series in buckets.items()
-    }
+        key = (family(r), r["exp_tag"], r["seed"])
+        if key not in latest or r["epoch"] > latest[key][0]:
+            latest[key] = (r["epoch"], r["err_mha"])
+    out = defaultdict(list)
+    for (fam, _t, _s), (_e, err) in latest.items():
+        out[fam].append(err)
+    return out
 
-
-# --------------------------------------------------------------------------
-# text summary — works with zero non-stdlib dependencies
-# --------------------------------------------------------------------------
 
 def summarize(rows):
-    best = [r for r in rows
-            if r["sample_idx"] == -1 and "best_so_far" in (r["stage"] or "")]
-    if not best:
-        print("\nno best_so_far rows found.")
-        return
+    by_mol = defaultdict(list)
+    for r in rows:
+        by_mol[molecule_key(r)].append(r)
 
-    # final (= largest epoch) error per run, per stage
-    final = {}
-    for r in best:
-        if r["err_mha"] is None:
-            continue
-        key = (r["model"], r["n_params"], r["stage"], r["exp_tag"], r["seed"])
-        prev = final.get(key)
-        if prev is None or r["epoch"] > prev[0]:
-            final[key] = (r["epoch"], r["err_mha"])
+    for ref, mol_rows in sorted(by_mol.items(), key=lambda kv: (kv[0] is None, kv[0])):
+        models = {family(r): (r["model"], r["n_params"]) for r in mol_rows}
+        print()
+        print("=" * 92)
+        print(f"SYSTEM with CASCI = {ref}      ({len(models)} run families)")
+        print("=" * 92)
+        print(f"{'family':<26} {'model':<32} {'params':>11} "
+              f"{'GQE-optimized':>16} {'Global-refined':>16}")
+        print("-" * 92)
+        finals = {st: _final_per_seed(mol_rows, st) for st in STAGES}
+        for fam in sorted(models):
+            model, n_params = models[fam]
+            cells = []
+            for st in STAGES:
+                errs = finals[st].get(fam, [])
+                if not errs:
+                    cells.append("-")
+                elif len(errs) == 1:
+                    cells.append(f"{errs[0]:.2f}")
+                else:
+                    cells.append(f"{stats.mean(errs):.2f}+/-{stats.stdev(errs):.2f}")
+            params = f"{n_params:,}" if isinstance(n_params, int) else "?"
+            print(f"{fam:<26} {model:<32} {params:>11} {cells[0]:>16} {cells[1]:>16}")
 
-    agg = defaultdict(list)
-    for (model, n_params, stage, _tag, _seed), (_ep, err) in final.items():
-        agg[(model, n_params, stage)].append(err)
+        print(f"\n  errors in mHa vs this system's CASCI; chemical accuracy = "
+              f"{CHEMICAL_ACCURACY_MHA} mHa")
+        if len({p for _m, p in models.values()}) > 1:
+            print("  NOTE: parameter counts differ. A ranking that tracks `params`")
+            print("        is a capacity result, not an architecture one.")
 
-    print()
-    print("=" * 86)
-    print("FINAL best-so-far error vs CASCI, mHa (lower is better)")
-    print("=" * 86)
-    print(f"{'model':<24} {'params':>11}  {'stage':<28} {'error':>18}")
-    print("-" * 86)
-    for (model, n_params, stage), errs in sorted(agg.items()):
-        if len(errs) == 1:
-            cell = f"{errs[0]:.2f}  (1 seed)"
-        else:
-            cell = f"{stats.mean(errs):.2f} +/- {stats.stdev(errs):.2f} ({len(errs)})"
-        params = f"{n_params:,}" if isinstance(n_params, int) else "?"
-        print(f"{model:<24} {params:>11}  {stage:<28} {cell:>18}")
-
-    print(f"\n  chemical accuracy = {CHEMICAL_ACCURACY_MHA} mHa")
-    if len({p for _m, p, _s in agg}) > 1:
-        print("  NOTE: parameter counts differ between models. A ranking that")
-        print("        tracks `params` is a capacity result, not an architecture one.")
-
-    # did the policy stall?
-    print()
-    print("=" * 86)
-    print("STALL CHECK - last epoch at which a new best was found")
-    print("=" * 86)
-    last_improve = {}
-    seen = {}
-    for r in sorted(best, key=lambda r: (r["exp_tag"], r["stage"], r["epoch"])):
-        if r["err_mha"] is None:
-            continue
-        key = (r["exp_tag"], r["stage"])
-        if key not in seen or r["err_mha"] < seen[key] - 1e-9:
-            seen[key] = r["err_mha"]
-            last_improve[key] = r["epoch"]
-    max_epoch = defaultdict(int)
-    for r in best:
-        max_epoch[(r["exp_tag"], r["stage"])] = max(
-            max_epoch[(r["exp_tag"], r["stage"])], r["epoch"] or 0)
-    tag_to_model = {r["exp_tag"]: r["model"] for r in best}
-    by_model = defaultdict(list)
-    for key, epoch in last_improve.items():
-        total = max_epoch[key] or 1
-        by_model[(tag_to_model.get(key[0], "?"), key[1])].append(
-            100.0 * epoch / total)
-    print(f"{'model':<24} {'stage':<28} {'last gain (% of run)':>26}")
-    print("-" * 86)
-    for (model, stage), pcts in sorted(by_model.items()):
-        if len(pcts) == 1:
-            cell = f"{pcts[0]:.0f}%  (1 seed)"
-        else:
-            cell = f"{stats.mean(pcts):.0f}% +/- {stats.stdev(pcts):.0f} ({len(pcts)})"
-        print(f"{model:<24} {stage:<28} {cell:>26}")
-    print("\n  A low percentage means training continued long after the policy")
-    print("  stopped improving: wasted compute, or exploration that died early.")
+        # stall check
+        seen, last_gain, max_ep = {}, {}, defaultdict(int)
+        for r in sorted(mol_rows, key=lambda r: (r["exp_tag"], r["stage"], r["epoch"] or 0)):
+            if r["stage"] not in STAGES or r["err_mha"] is None:
+                continue
+            key = (r["exp_tag"], r["stage"])
+            max_ep[key] = max(max_ep[key], r["epoch"] or 0)
+            if key not in seen or r["err_mha"] < seen[key] - 1e-9:
+                seen[key] = r["err_mha"]
+                last_gain[key] = r["epoch"]
+        tag_fam = {r["exp_tag"]: family(r) for r in mol_rows}
+        pct = defaultdict(list)
+        for key, ep in last_gain.items():
+            pct[(tag_fam[key[0]], key[1])].append(100.0 * ep / (max_ep[key] or 1))
+        if pct:
+            print(f"\n  STALL: last epoch with a new best, as % of the run")
+            for (fam, stage), ps in sorted(pct.items()):
+                cell = (f"{ps[0]:.0f}%" if len(ps) == 1
+                        else f"{stats.mean(ps):.0f}% +/- {stats.stdev(ps):.0f}")
+                print(f"    {fam:<26} {stage:<30} {cell:>14}")
+            print("    low % = training continued long after the policy stopped improving")
 
 
 # --------------------------------------------------------------------------
-# figures — matplotlib only
+# figures - one set per system, GQE-optimized and Global-refined side by side
 # --------------------------------------------------------------------------
 
-def fig_best_vs_epoch(rows, ax):
-    series = group_mean([r for r in rows if r["sample_idx"] == -1],
-                        ("model", "stage"), "err_mha")
-    if not series:
+def _series(rows, stage, value):
+    buckets = defaultdict(lambda: defaultdict(list))
+    for r in rows:
+        if r["stage"] != stage or r.get(value) is None:
+            continue
+        buckets[family(r)][r["epoch"]].append(r[value])
+    return {f: {e: stats.mean(v) for e, v in sorted(s.items())}
+            for f, s in buckets.items()}
+
+
+def paired_curve(rows, plt, value, ylabel, title, logy, path):
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2), sharey=True)
+    drew = False
+    for ax, stage in zip(axes, STAGES):
+        for fam, pts in sorted(_series(rows, stage, value).items()):
+            ax.plot(list(pts), list(pts.values()), lw=1.5, label=fam)
+            drew = True
+        ax.set(xlabel="epoch", title=stage)
+        if logy:
+            ax.set_yscale("log")
+        if value == "err_mha":
+            ax.axhline(CHEMICAL_ACCURACY_MHA, ls="--", c="k", lw=0.8)
+        ax.grid(alpha=0.25, lw=0.5)
+    if not drew:
+        plt.close(fig)
         return False
-    for (model, stage), pts in sorted(series.items()):
-        ax.plot(list(pts), list(pts.values()), label=f"{model} / {stage}", lw=1.4)
+    axes[0].set_ylabel(ylabel)
+    axes[1].legend(fontsize=7)
+    fig.suptitle(title)
+    fig.tight_layout()
+    for ext in ("pdf", "png"):
+        fig.savefig(f"{path}.{ext}", dpi=150)
+    plt.close(fig)
+    return True
+
+
+def final_scatter(rows, plt, title, path):
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), sharey=True)
+    drew = False
+    for ax, stage in zip(axes, STAGES):
+        finals = _final_per_seed(rows, stage)
+        names = sorted(finals)
+        for i, fam in enumerate(names):
+            ax.scatter([i] * len(finals[fam]), finals[fam], s=26, zorder=3)
+            ax.scatter([i], [stats.mean(finals[fam])], marker="_", s=420, c="k", zorder=4)
+            drew = True
+        ax.set_xticks(range(len(names)))
+        ax.set_xticklabels(names, fontsize=6, rotation=35, ha="right")
+        ax.set(title=stage, yscale="log")
+        ax.axhline(CHEMICAL_ACCURACY_MHA, ls="--", c="k", lw=0.8)
+        ax.grid(alpha=0.25, lw=0.5, axis="y")
+    if not drew:
+        plt.close(fig)
+        return False
+    axes[0].set_ylabel("final error vs CASCI (mHa)")
+    fig.suptitle(title + "    points = seeds, bar = mean, dashed = chemical accuracy")
+    fig.tight_layout()
+    for ext in ("pdf", "png"):
+        fig.savefig(f"{path}.{ext}", dpi=150)
+    plt.close(fig)
+    return True
+
+
+def cost_vs_error(rows, plt, title, path):
+    """Accuracy against compiled circuit cost, which is what changing L buys."""
+    fig, ax = plt.subplots(figsize=(7, 4.8))
+    finals = _final_per_seed(rows, "Global-refined(best_so_far)")
+    costs = defaultdict(list)
+    for r in rows:
+        if r["stage"] == "GQE-optimized(best_so_far)" and r.get("total_gates"):
+            costs[family(r)].append(r["total_gates"])
+    drew = False
+    for fam in sorted(finals):
+        if fam not in costs:
+            continue
+        x, y = stats.mean(costs[fam]), stats.mean(finals[fam])
+        ax.scatter(x, y, s=52, zorder=3)
+        ax.annotate(fam, (x, y), fontsize=6, xytext=(5, 4), textcoords="offset points")
+        drew = True
+    if not drew:
+        plt.close(fig)
+        return False
     ax.axhline(CHEMICAL_ACCURACY_MHA, ls="--", c="k", lw=0.8)
-    ax.set(xlabel="epoch", ylabel="error vs CASCI (mHa)", yscale="log",
-           title="best-so-far error (mean over seeds)")
-    ax.legend(fontsize=6)
+    ax.set(xlabel="compiled gates in the best circuit",
+           ylabel="final error vs CASCI (mHa)", yscale="log", title=title)
+    ax.grid(alpha=0.25, lw=0.5)
+    fig.tight_layout()
+    for ext in ("pdf", "png"):
+        fig.savefig(f"{path}.{ext}", dpi=150)
+    plt.close(fig)
     return True
 
 
-def fig_subspace_vs_epoch(rows, ax):
-    series = group_mean([r for r in rows if r["sample_idx"] == -1],
-                        ("model", "stage"), "subspace_dim")
-    if not series:
-        return False
-    for (model, stage), pts in sorted(series.items()):
-        ax.plot(list(pts), list(pts.values()), label=f"{model} / {stage}", lw=1.4)
-    ax.set(xlabel="epoch", ylabel="subspace dim",
-           title="subspace size (flat = saturated cap, or no new best)")
-    ax.legend(fontsize=6)
-    return True
+def make_figures(rows, out_dir, plt):
+    os.makedirs(out_dir, exist_ok=True)
+    by_mol = defaultdict(list)
+    for r in rows:
+        by_mol[molecule_key(r)].append(r)
 
+    for ref, mol_rows in sorted(by_mol.items(), key=lambda kv: (kv[0] is None, kv[0])):
+        fams = {family(r): r["model"] for r in mol_rows}
+        label = f"CASCI={ref}"
+        slug = "casci" + str(ref).replace(".", "p").replace("-", "m")
+        print(f"\n{label}: {len(fams)} run families")
+        for fam, model in sorted(fams.items()):
+            print(f"    {fam:<28} {model}")
 
-def fig_sample_spread(rows, ax):
-    batch = [r for r in rows if (r["sample_idx"] or -1) >= 0 and r["err_mha"] is not None]
-    if not batch:
-        return False
-    per_epoch = defaultdict(list)
-    for r in batch:
-        per_epoch[r["epoch"]].append(r["err_mha"])
-    xs = sorted(per_epoch)
-    lo = [min(per_epoch[x]) for x in xs]
-    hi = [max(per_epoch[x]) for x in xs]
-    mid = [stats.median(per_epoch[x]) for x in xs]
-    ax.fill_between(xs, lo, hi, alpha=0.25, label="min-max")
-    ax.plot(xs, mid, lw=1.4, label="median")
-    ax.axhline(CHEMICAL_ACCURACY_MHA, ls="--", c="k", lw=0.8)
-    ax.set(xlabel="epoch", ylabel="error vs CASCI (mHa)", yscale="log",
-           title="rollout batch spread (collapse = exploration died)")
-    ax.legend(fontsize=6)
-    return True
-
-
-def fig_final_by_model(rows, ax):
-    best = [r for r in rows
-            if r["sample_idx"] == -1 and "best_so_far" in (r["stage"] or "")
-            and r["err_mha"] is not None]
-    if not best:
-        return False
-    final = {}
-    for r in best:
-        key = (r["model"], r["stage"], r["exp_tag"], r["seed"])
-        if key not in final or r["epoch"] > final[key][0]:
-            final[key] = (r["epoch"], r["err_mha"])
-    grouped = defaultdict(list)
-    for (model, stage, _t, _s), (_e, err) in final.items():
-        grouped[(model, stage)].append(err)
-    labels, positions = [], []
-    for i, (key, errs) in enumerate(sorted(grouped.items())):
-        ax.scatter([i] * len(errs), errs, s=18)
-        labels.append(f"{key[0]}\n{key[1]}")
-        positions.append(i)
-    ax.axhline(CHEMICAL_ACCURACY_MHA, ls="--", c="k", lw=0.8)
-    ax.set_xticks(positions)
-    ax.set_xticklabels(labels, fontsize=5, rotation=30, ha="right")
-    ax.set(ylabel="final error vs CASCI (mHa)", yscale="log",
-           title="final error per model (one point per seed)")
-    return True
-
-
-FIGURES = [
-    ("best_vs_epoch", fig_best_vs_epoch),
-    ("subspace_vs_epoch", fig_subspace_vs_epoch),
-    ("sample_spread", fig_sample_spread),
-    ("final_by_model", fig_final_by_model),
-]
+        for value, ylabel, name, logy in [
+            ("err_mha", "error vs CASCI (mHa)", "error", True),
+            ("subspace_dim", "subspace dim", "subspace", False),
+            ("num_sampled_basis", "distinct determinants sampled", "sampled_basis", False),
+        ]:
+            path = os.path.join(out_dir, f"{name}_{slug}")
+            if paired_curve(mol_rows, plt, value, ylabel,
+                            f"{name} ({label}, mean over seeds)", logy, path):
+                print(f"  wrote {name}_{slug}")
+        if final_scatter(mol_rows, plt, f"final error ({label})",
+                         os.path.join(out_dir, f"final_{slug}")):
+            print(f"  wrote final_{slug}")
+        if cost_vs_error(mol_rows, plt, f"cost vs accuracy ({label})",
+                         os.path.join(out_dir, f"cost_{slug}")):
+            print(f"  wrote cost_{slug}")
 
 
 def main():
@@ -272,17 +310,30 @@ def main():
     ap.add_argument("--glob", default="outputs/gqe-for-qsci/*")
     ap.add_argument("--out", default="figures")
     ap.add_argument("--summary", action="store_true",
-                    help="text summary only; needs no third-party packages, so "
-                         "it works inside the ABCI-Q container")
+                    help="text only; no third-party packages, so it works in "
+                         "the ABCI-Q container")
     ap.add_argument("--merge", metavar="PATH",
-                    help="write every row to one CSV and exit — copy that to a "
-                         "machine with matplotlib to draw figures")
+                    help="write every row to one CSV and exit")
+    ap.add_argument("--exclude", default="smoke",
+                    help="regex; run families matching it are dropped. Defaults "
+                         "to 'smoke' because probe runs inherit the experiment's "
+                         "W&B group and output tree, and a 2-iteration probe in "
+                         "the tables looks like a catastrophically bad model. "
+                         "Pass '' to keep everything.")
     args = ap.parse_args()
 
     rows = load_rows(args.glob)
 
+    if args.exclude:
+        pattern = re.compile(args.exclude)
+        dropped = sorted({family(r) for r in rows if pattern.search(family(r))})
+        if dropped:
+            rows = [r for r in rows if not pattern.search(family(r))]
+            print(f"excluded {len(dropped)} famil(ies) matching "
+                  f"{args.exclude!r}: {', '.join(dropped)}")
+
     if args.merge:
-        fields = [k for k in rows[0] if k not in ("err_mha",)]
+        fields = [k for k in rows[0] if k != "err_mha"]
         with open(args.merge, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             w.writeheader()
@@ -301,31 +352,11 @@ def main():
     except ImportError:
         print("\nmatplotlib is not installed here (the ABCI-Q container has "
               "numpy/scipy/torch but not matplotlib).")
-        print("Falling back to the text summary. For figures, either run this on "
-              "your laptop, or:")
-        print("    python3 hpc/plot_results.py --merge merged.csv")
-        print("and copy merged.csv somewhere with matplotlib.")
+        print("Use --merge and draw the figures on a machine that has it.")
         summarize(rows)
         return
 
-    os.makedirs(args.out, exist_ok=True)
-    for name, fn in FIGURES:
-        fig, ax = plt.subplots(figsize=(6, 4))
-        try:
-            ok = fn(rows, ax)
-        except Exception as exc:                                  # noqa: BLE001
-            print(f"  skip {name}: {type(exc).__name__}: {exc}")
-            plt.close(fig)
-            continue
-        if not ok:
-            print(f"  skip {name}: no matching rows")
-            plt.close(fig)
-            continue
-        fig.tight_layout()
-        for ext in ("pdf", "png"):
-            fig.savefig(os.path.join(args.out, f"{name}.{ext}"), dpi=150)
-        plt.close(fig)
-        print(f"  wrote {name}.pdf / .png")
+    make_figures(rows, args.out, plt)
     print(f"\nfigures in {args.out}/")
 
 
