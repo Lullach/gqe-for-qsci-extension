@@ -191,7 +191,55 @@ $C_t$, so it is scored exactly once, and the code returns the **per-position
 decomposition** $(B, L)$ rather than the scalar above — `GRPOLoss` uses it
 elementwise.
 
-For circuit 1 with `gate_tokens = [5,3,2,1]` and `reveal_step = [3,4,2,3]`:
+**What one factor in the product actually is.** The network does a single
+forward pass over the whole sequence and returns a $(L, V)$ matrix — for *every*
+position, a distribution over all $V$ operators:
+
+$$P^{(t)}[i, v] = \mathrm{softmax}_v\big(-\beta \cdot f_\theta(x_t, t)[i]\big)_v$$
+
+and $p_\theta(x_0[i] \mid x_t, t)$ is one **entry** of it: row $i$, column
+$x_0[i]$ — the probability the model assigned, at step $t$, to the gate that
+position $i$ ended up with. ($x_0[i]$ is a *value*, the final token at that
+position; the column index is what the notation hides.) The conditioning is on
+the whole partially-masked $x_t$, because the denoiser is bidirectional, so
+position $i$'s row depends on every currently-visible token — and on $t$, which
+enters through the time embedding.
+
+At $t = 3$ in the run below, the network sees $x_3 =$ `[M,3,M,M]` and returns:
+
+| position | op0 | op1 | op2 | op3 | op4 | op5 | |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.20 | 0.18 | 0.15 | 0.20 | 0.135 | **0.135** | commits → keeps op5 |
+| 1 | 0.05 | 0.10 | 0.10 | 0.55 | 0.10 | 0.10 | already visible → discarded |
+| 2 | 0.15 | 0.15 | 0.25 | 0.15 | 0.15 | 0.15 | masked, coin failed → discarded |
+| 3 | 0.10 | **0.407** | 0.10 | 0.143 | 0.15 | 0.10 | commits → keeps op1 |
+
+$C_3 = \{0, 3\}$, so the product has exactly two factors,
+$0.135 \times 0.407$, i.e. $\log$ contributions $-2.0$ and $-0.9$. The coin half
+is the other question entirely: $m_3 = 3$ masked entering the step and 2
+committed give $0.414^2 \cdot 0.586 = 0.100$. **Which** slots opened is the
+coins' business; **what** went into them is the product's.
+
+The same distribution is used for sampling (`Categorical(logits=-β*logits)`) and
+for scoring (`log_softmax(-β*logits)` then `gather`), which is what makes replay
+exact rather than approximate.
+
+Collecting all three steps for circuit 1, with `gate_tokens = [5,3,2,1]` and
+`reveal_step = [3,4,2,3]`:
+
+| $t$ | $x_t$ | $C_t$ | factors used | coins |
+|---|---|---|---|---|
+| 4 | `[M,M,M,M]` | $\{1\}$ | $P^{(4)}[1,3] = 0.165$ | $0.146^1 \cdot 0.854^3 = 0.091$ |
+| 3 | `[M,3,M,M]` | $\{0,3\}$ | $P^{(3)}[0,5] = 0.135$, $P^{(3)}[3,1] = 0.407$ | $0.414^2 \cdot 0.586^1 = 0.100$ |
+| 2 | `[5,3,M,1]` | $\{2\}$ | $P^{(2)}[2,2] = 0.223$ | $0.707^1 \cdot 0.293^0 = 0.707$ |
+
+Note position 0 gets a row at every step, but only the $t = 3$ one is ever used:
+at $t = 4$ the model guessed it knowing nothing, and that guess was discarded
+when the coin came up 0. Same for the same position's *re-prediction* — the
+model re-guesses every position every step, and all but the committed ones are
+thrown away, which is the compute cost §1.1 describes.
+
+Laid out per position, which is the shape the code returns:
 
 | $t$ | positions committed | $x_t$ fed to `_logits` | contribution |
 |---|---|---|---|
@@ -371,11 +419,24 @@ Three steps of the toy DAG run:
 | step 2 | `[0.9713, 1.0392]` | 1.1315 | 0.022603 | 1.1089 |
 | step 3 | `[0.9343, 1.0939]` | 1.0803 | 0.053159 | 1.0271 |
 
-Read the $r$ column downward — that is the whole dynamic. At step 1
-$\log p_\text{new} = \log p_\text{old}$ exactly, so every ratio is 1 and the PPO
-term contributes nothing. As weights move the ratios fan out; over 30 real steps
-they reach the clip bounds, and the clip stops one rollout group from moving the
-policy too far.
+Read the $r$ column downward — that is the whole dynamic. The weights have not
+moved yet at step 1, so the ratios start at 1 and the PPO term contributes
+nothing; as the weights move they fan out, and over 30 real steps they reach the
+clip bounds, which is what stops one rollout group from moving the policy too
+far.
+
+> **One wrinkle the toy table hides.** It was produced with $\beta$ held fixed,
+> so step 1 gives exactly $1.0000$. A real run does not: `collect_rollout` scores
+> `old_log_probs` at the current $\beta$ and *then* calls
+> `scheduler.update()` ([train_pipeline.py:468](../gqe_qsci/train_pipeline.py)),
+> so all 30 gradient steps use $\beta + \delta$ ($\delta = 0.02$ by default).
+> Since $\partial \log p_i / \partial \beta = \mathbb{E}_p[z] - z_i$ and a
+> *sampled* token usually sits below the mean pseudo-energy, this offsets step 1
+> slightly and systematically **above** 1 — annealing, not learning, consuming a
+> sliver of the clip budget at the start of every epoch. It is still correct
+> importance sampling (the behavior policy really was the old $\beta$), just not
+> the clean $r = 1$ the table suggests. Unquantified in a real run; worth a look
+> at the logged ratio spread if the clip ever appears to bite early.
 
 **How this differs from $\text{DDPO}_\text{IS}$ as published**, worth stating
 before citing it:
