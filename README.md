@@ -76,17 +76,19 @@ The original simplified model, kept for comparison and backward compatibility. S
 
 ##### CircuitDiffusionModelAbsorbing (`model=diffusion_absorbing`)
 
-**Theory.** Implements absorbing diffusion ([D3PM, Austin et al., 2021](https://arxiv.org/abs/2107.03006) / MDLM-style). The forward process independently masks each gate with probability $(1 - \alpha_t)$ under a noise schedule:
+**Theory.** Implements absorbing diffusion ([D3PM, Austin et al., 2021](https://arxiv.org/abs/2107.03006)), in the masked-diffusion form where only masked positions are scored ([MDLM, Sahoo et al., 2024](https://arxiv.org/abs/2406.07524); concurrently [Shi et al., 2024](https://arxiv.org/abs/2406.04329)). The forward process independently masks each gate with probability $(1 - \alpha_t)$ under a noise schedule:
 
 $$q(x_t | x_0): \text{each token masked with prob } (1 - \alpha_t), \quad \alpha_0 = 1,\ \alpha_T = 0$$
 
 The reverse process uses the exact closed-form posterior $q(x_{t-1} | x_t, \hat{x}_0)$, revealing masked positions progressively from $t = T$ down to $t = 1$.
 
-**log_prob.** The **exact log-probability of the sampled reverse trajectory** (DDPO-style, [Black et al., 2023](https://arxiv.org/abs/2305.13301)):
+**log_prob.** The **exact log-probability of the sampled reverse trajectory** (DDPO-style, [Black et al., 2023](https://arxiv.org/abs/2305.13301); cf. [DPOK, Fan et al., 2023](https://arxiv.org/abs/2305.16381)):
 
-$$\log p_\theta(\tau) = \sum_t \sum_{i \text{ committed at } t} \log p_\theta(x_0^i \mid x_t, t)$$
+$$\log p(\tau) = \log q(\tau) + \sum_t \sum_{i \text{ committed at } t} \log p_\theta(x_0^i \mid x_t, t)$$
 
-`sample_sequence` records `state["reveal_step"]` — the timestep at which each position was committed — and `log_prob` replays exactly those decisions, scoring each position once. GRPO needs the probability of the *action sequence taken*, and the θ-independent reveal coins cancel in the importance ratio $\exp(\log p_\text{new} - \log p_\text{old})$, leaving only these terms. This replaced an earlier denoising-ELBO implementation, which bounded $\log p(x_0)$ and measured reconstructability rather than the sampler's own distribution; see `NOTES.md`.
+where $q(\tau)$ collects the reveal-coin factors and contains no $\theta$.
+
+`sample_sequence` records `state["reveal_step"]` — the timestep at which each position was committed — and `log_prob` replays exactly those decisions, scoring each position once and computing only the sum: $\log q$ cancels in the importance ratio $\exp(\log p_\text{new} - \log p_\text{old})$, so the sum is the θ-dependent part of the trajectory log-probability. GRPO needs the probability of the *action sequence taken*. A full derivation, with the conditional-independence and marginalization steps, is in [`docs/TRAINING_WALKTHROUGH.md`](docs/TRAINING_WALKTHROUGH.md) §1.3. This replaced an earlier denoising-ELBO implementation, which bounded $\log p(x_0)$ and measured reconstructability rather than the sampler's own distribution; see `NOTES.md`.
 
 **Noise schedule.** Configurable as `cosine` (recommended) or `linear` via `noise_schedule`.
 

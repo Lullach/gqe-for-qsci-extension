@@ -19,6 +19,11 @@ Code: `gqe_qsci/train_pipeline.py`, `gqe_qsci/gqe/models/diffusion.py`,
 `gqe_qsci/gqe/models/pointer_dag.py`, `gqe_qsci/gqe/loss.py`,
 `gqe_qsci/gqe/buffer.py`.
 
+The method being modified is the generative quantum eigensolver
+([Nakaji et al., 2024](https://arxiv.org/abs/2401.09253)); the loop below is its
+GPT-2 rollout/reward structure with the policy swapped out. Primary references
+for every mechanism are collected in [§6](#6-references).
+
 ---
 
 ## 0. The shared skeleton
@@ -50,6 +55,17 @@ Three invariants worth keeping in mind:
 ---
 
 ## 1. Absorbing diffusion (`model=diffusion_absorbing`)
+
+The forward and reverse processes are D3PM's absorbing-state variant
+([Austin et al., 2021](https://arxiv.org/abs/2107.03006)): per-token masking with
+$\alpha_0 = 1$, $\alpha_T = 0$, and the closed-form posterior
+$q(x_{t-1} \mid x_t, \hat{x}_0)$. The masked-diffusion simplification this
+implementation follows — one categorical per position, and only masked positions
+contribute — is the MDLM line
+([Sahoo et al., 2024](https://arxiv.org/abs/2406.07524); concurrently
+[Shi et al., 2024](https://arxiv.org/abs/2406.04329)). The *objective* is not
+theirs: §1.3 replaces the masked-diffusion ELBO with an exact trajectory
+log-probability.
 
 ### Setup
 
@@ -136,6 +152,10 @@ energies = [-107.20, -107.44, -107.31, -107.15]   # Ha; circuit 1 is best
 `scheduler.update(energies=...)` then nudges $\beta$ from the spread.
 
 ### 1.3 `log_prob` → `old_log_probs` (exact trajectory, DDPO)
+
+This is the DDPO formulation — score the denoising trajectory as the action
+sequence of a policy ([Black et al., 2023](https://arxiv.org/abs/2305.13301); cf.
+DPOK, [Fan et al., 2023](https://arxiv.org/abs/2305.16381)).
 
 The trajectory is $\tau = (x_T, x_{T-1}, \ldots, x_0)$, the sequence of
 partially-masked states the reverse process passed through. Write $C_t$ for the
@@ -271,8 +291,11 @@ Operator $k$ is forbidden at step $t$ iff
 
 $$\exists\, i < t \ :\ \big[k,\ \texttt{prefix}[m]\big] = 0 \ \ \forall m \in [i, t-1] \quad\text{and}\quad k < \texttt{prefix}[i]$$
 
-This keeps one representative per Mazurkiewicz trace class — commuting gates are
-only spellable in their sorted order.
+This keeps one representative per Mazurkiewicz **trace class** — the equivalence
+classes of a free partially commutative monoid, where commuting gates are only
+spellable in their sorted order ([Mazurkiewicz,
+1987](https://doi.org/10.1007/3-540-17906-2_30); Diekert & Rozenberg, *The Book
+of Traces*, 1995).
 
 | step | prefix | forbidden | allowed | sampled |
 |---|---|---|---|---|
@@ -322,7 +345,12 @@ advantages = [-0.5827, +1.2819, +0.2719, -0.9712]
 Circuit 1 (lowest energy) gets the largest **positive** advantage — lower energy
 ⇒ push probability up.
 
-`GRPOLoss` has **two** terms; the first is an addition to textbook GRPO:
+`GRPOLoss` has **two** terms. The second is GRPO proper — group-relative
+advantages with a clipped PPO objective and no value network
+([Shao et al., 2024](https://arxiv.org/abs/2402.03300), DeepSeekMath). The first
+is an addition with **no known reference**: it is inherited from the original
+NVIDIA CUDA-QX GQE code and is not part of GRPO as published. Worth knowing
+before citing this loss as "GRPO" in writing.
 
 $$\mathcal{L} = \underbrace{-\,\overline{\log p_\theta(\tau_{b^\star})}}_{\text{NLL on the winner } b^\star = \arg\min_b E_b} \;-\; \underbrace{\min\Big(\overline{r A},\ \overline{\mathrm{clip}(r,\,1-0.2,\,1+0.28)\,A}\Big)}_{\text{clipped PPO objective}} \;-\; c_H \overline{H}$$
 
@@ -532,3 +560,60 @@ The pointer steps are einsums over $n + 1 \approx 17$ keys, so they are noise
 next to the GNN passes — and all of it is noise next to the CUDA-Q simulations
 and QSCI diagonalizations, as in §4. Structural shape only; there are no
 measured timings here until the first cluster run.
+
+---
+
+## 6. References
+
+Every arXiv identifier below was checked against the listing page, not recalled.
+
+**The method.**
+- K. Nakaji, L. B. Kristensen, R. Kemmoku, *et al.*, "The generative quantum
+  eigensolver (GQE) and its application for ground state search,"
+  [arXiv:2401.09253](https://arxiv.org/abs/2401.09253) (2024). The method this
+  repository modifies; `gqe_qsci/gqe/models/gpt2.py` derives from its CUDA-QX
+  implementation.
+
+**Discrete diffusion (§1).**
+- J. Austin, D. D. Johnson, J. Ho, D. Tarlow, R. van den Berg, "Structured
+  Denoising Diffusion Models in Discrete State-Spaces,"
+  [arXiv:2107.03006](https://arxiv.org/abs/2107.03006) (2021). D3PM; the
+  absorbing-state process of §1.1 and the schedule of `_make_alpha_schedule`.
+- S. S. Sahoo, M. Arriola, Y. Schiff, *et al.*, "Simple and Effective Masked
+  Diffusion Language Models,"
+  [arXiv:2406.07524](https://arxiv.org/abs/2406.07524) (NeurIPS 2024). MDLM —
+  the masked-diffusion parameterization in which only masked positions are
+  scored.
+- J. Shi, K. Han, Z. Wang, A. Doucet, M. K. Titsias, "Simplified and Generalized
+  Masked Diffusion for Discrete Data,"
+  [arXiv:2406.04329](https://arxiv.org/abs/2406.04329) (2024). Concurrent with
+  MDLM and largely equivalent for our purposes.
+
+**The objective (§1.3, §3).**
+- K. Black, M. Janner, Y. Du, I. Kostrikov, S. Levine, "Training Diffusion Models
+  with Reinforcement Learning,"
+  [arXiv:2305.13301](https://arxiv.org/abs/2305.13301) (2023). DDPO — scoring the
+  denoising trajectory as a policy's action sequence, which is what §1.3
+  implements.
+- Y. Fan, O. Watkins, Y. Du, *et al.*, "DPOK: Reinforcement Learning for
+  Fine-tuning Text-to-Image Diffusion Models,"
+  [arXiv:2305.16381](https://arxiv.org/abs/2305.16381) (NeurIPS 2023). The other
+  early RL-on-diffusion formulation; cf. DDPO.
+- Z. Shao, P. Wang, Q. Zhu, *et al.*, "DeepSeekMath: Pushing the Limits of
+  Mathematical Reasoning in Open Language Models,"
+  [arXiv:2402.03300](https://arxiv.org/abs/2402.03300) (2024). GRPO.
+
+*Not attributable:* the NLL-on-the-winner term in §3 has no reference. It comes
+from the CUDA-QX GQE code and is not part of GRPO as published.
+
+**Commutation / canonical forms (§2.3).**
+- A. Mazurkiewicz, "Trace Theory," in *Petri Nets: Applications and Relationships
+  to Other Models of Concurrency*, LNCS 255, pp. 279–324
+  ([Springer, 1987](https://doi.org/10.1007/3-540-17906-2_30)).
+- V. Diekert, G. Rozenberg (eds.), *The Book of Traces*, World Scientific (1995).
+  Standard reference for free partially commutative monoids and their normal
+  forms.
+
+**Value proposition / baselines** (not part of this walkthrough; see `NOTES.md`,
+"Value proposition: fair classical baseline"): Lee et al., *Nat. Commun.* **14**,
+1952 (2023), on the contested status of ground-state quantum advantage.
