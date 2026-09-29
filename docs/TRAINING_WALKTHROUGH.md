@@ -169,6 +169,7 @@ entering that step. One step factorizes as
 
 $$p(x_{t-1} \mid x_t) = \underbrace{p_\text{reveal}(t)^{|C_t|}\big(1-p_\text{reveal}(t)\big)^{m_t - |C_t|}}_{\text{reveal coins — no } \theta} \cdot \prod_{i \in C_t} p_\theta\big(x_0[i] \mid x_t, t\big)$$
 
+Note in the equation $x_0[i]=x_{t-1}[i](=x_{t-2}[i]...)$ for all committed positions.
 The product over positions is legitimate because the logits are computed per
 position from $x_t$, so the draws are conditionally independent given $x_t$; and
 the proposals at *non*-committed positions marginalize to 1, since a discarded
