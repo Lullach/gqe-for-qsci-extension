@@ -346,10 +346,28 @@ qsub -J 1-5 -r y -W group_list=$ABCIQ_GROUP -l walltime=12:00:00 -v EXPERIMENT=a
 
 ```bash
 qstat -w -x -a | grep qci10467lu | tail -30
-python3 hpc/plot_results.py --glob "outputs/gqe-for-qsci/*"
 ```
 
-No W&B sync needed for the figures -- `plot_results.py` reads `results.csv`
+On the CLUSTER, use `--summary`. It is standard library only, because the
+container has numpy/scipy/torch but **no pandas and no matplotlib**:
+
+```bash
+python3 hpc/plot_results.py --summary
+```
+
+That prints the final error per model (with parameter counts, so a capacity
+ranking is visible as such) and a stall check: the last epoch at which each
+model found a new best, as a percentage of the run.
+
+For FIGURES, merge and copy to your laptop, where matplotlib exists:
+
+```bash
+python3 hpc/plot_results.py --merge merged.csv
+# then, locally:
+python3 hpc/plot_results.py --glob merged.csv --out figures/
+```
+
+No W&B sync is needed for any of this -- `plot_results.py` reads `results.csv`
 directly from the run directories. Sync only if you want the scalar curves in
 the web UI:
 
