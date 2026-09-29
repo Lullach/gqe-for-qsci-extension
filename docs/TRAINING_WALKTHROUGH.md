@@ -137,12 +137,34 @@ energies = [-107.20, -107.44, -107.31, -107.15]   # Ha; circuit 1 is best
 
 ### 1.3 `log_prob` → `old_log_probs` (exact trajectory, DDPO)
 
-$$\log p_\theta(\tau) = \sum_t \ \sum_{i \,:\, \text{committed at } t} \log p_\theta\big(x_0[i] \mid x_t, t\big)$$
+The trajectory is $\tau = (x_T, x_{T-1}, \ldots, x_0)$, the sequence of
+partially-masked states the reverse process passed through. Write $C_t$ for the
+set of positions **committed at step** $t$ and $m_t$ for the number still masked
+entering that step. One step factorizes as
 
-$x_t$ is reconstructed from the recorded trajectory by one rule: **position $i$
-is visible at step $t$ iff $\texttt{reveal\_step}[i] > t$** (it was committed at
-some later, i.e. larger, step). Each position is scored exactly once, at the
-step that committed it, and the result is $(B, L)$ with no averaging.
+$$p(x_{t-1} \mid x_t) = \underbrace{p_\text{reveal}(t)^{|C_t|}\big(1-p_\text{reveal}(t)\big)^{m_t - |C_t|}}_{\text{reveal coins — no } \theta} \cdot \prod_{i \in C_t} p_\theta\big(x_0[i] \mid x_t, t\big)$$
+
+The product over positions is legitimate because the logits are computed per
+position from $x_t$, so the draws are conditionally independent given $x_t$; and
+the proposals at *non*-committed positions marginalize to 1, since a discarded
+draw never influences any later state. Multiplying over $t$:
+
+$$\boxed{\ \log p(\tau) = \log q(\tau) + \sum_t \ \sum_{i \in C_t} \log p_\theta\big(x_0[i] \mid x_t, t\big)\ }$$
+
+where $q(\tau)$ collects every coin factor and contains no $\theta$. It
+therefore cancels in the GRPO ratio
+$\exp(\log p_\text{new} - \log p_\text{old})$, which is precisely why `log_prob`
+computes only the sum and drops $\log q$. So the sum is **the
+$\theta$-dependent part** of the trajectory log-probability, not
+$\log p(\tau)$ itself.
+
+$x_t$ — the state the network saw at step $t$ — is reconstructed from the
+recorded trajectory by one rule: **position $i$ is visible at step $t$ iff
+$\texttt{reveal\_step}[i] > t$** (it was committed at some later, i.e. larger,
+step; everything else is still `[MASK]`). Each position belongs to exactly one
+$C_t$, so it is scored exactly once, and the code returns the **per-position
+decomposition** $(B, L)$ rather than the scalar above — `GRPOLoss` uses it
+elementwise.
 
 For circuit 1 with `gate_tokens = [5,3,2,1]` and `reveal_step = [3,4,2,3]`:
 
@@ -154,11 +176,10 @@ For circuit 1 with `gate_tokens = [5,3,2,1]` and `reveal_step = [3,4,2,3]`:
 | | **sum** | | `[-2.0,-1.8,-1.5,-0.9]` |
 
 Why the trajectory and not the ELBO: GRPO needs the probability of the action
-sequence actually *taken*. The reveal coins are $\theta$-independent, so they
-cancel in the ratio $\exp(\log p_\text{new} - \log p_\text{old})$ and only these
-categorical terms remain. The ELBO bounds $\log p(x_0)$ —
-reconstructability — which is not the sampler's distribution, and it needed
-frozen corruption masks in the buffer to keep the ratio deterministic. See
+sequence actually *taken*, which is what the derivation above gives. The ELBO
+bounds $\log p(x_0)$ — reconstructability — which is not the sampler's
+distribution, and it needed frozen corruption masks in the buffer to keep the
+ratio deterministic. See
 `NOTES.md`, "Trajectory log-prob (DDPO) replaces the ELBO"; the ELBO code is in
 git history (`sample_masks()`, `_corrupt()`).
 
