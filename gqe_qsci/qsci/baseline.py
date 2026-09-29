@@ -181,16 +181,22 @@ def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
     (ndet, energy) for the BEST subspace of each size: take the exact FCI vector,
     sort determinants by |c|, keep the top n, re-diagonalize.
 
-    This is what every selection heuristic — heat-bath CI, and QSCI's quantum
-    sampling — is approximating. It is not a method: it needs the answer first.
-    It is the bound that says whether a given subspace size CAN reach a given
-    accuracy at all, which is the difference between "the policy is the limit"
-    and "the cap is the limit".
+    This is what QSCI's quantum sampling approximates: the sampled
+    determinants are essentially |c|^2-distributed, so top-n by |c| is the
+    best that sampling could ever converge to.
 
-    Strictly it is a near-optimal bound rather than a provable one: a subspace's
-    variational energy is not a sum of independent per-determinant contributions,
-    so some other n-determinant set could in principle do slightly better. In
-    practice top-n by |c| is very close, and far tighter than HCI.
+    IT IS NOT A LOWER BOUND ON THE ACHIEVABLE ERROR. Top-n by |c| provably
+    maximises OVERLAP with the exact state (it maximises the retained
+    sum of |c_i|^2), but energy is a different objective: a subspace's
+    variational energy is not a sum of per-determinant contributions, and
+    perturbation theory puts the energy value of determinant D at roughly
+    |c_D|^2 * (H_DD - E) — the extra gap factor is exactly what HCI's
+    criterion targets. So some other n-subset can have a LOWER energy, and
+    this curve is an UPPER bound on the error achievable at each size.
+    Finding the true optimum is combinatorial over C(N, n) subsets.
+
+    In practice it is close, and it beat HCI on H10, but do not report it as
+    a proven floor.
 
     Self-checked: re-diagonalizing over ALL extracted determinants must reproduce
     the full CI energy. If the extraction or the coefficient ordering were wrong,
@@ -226,3 +232,69 @@ def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
         subset = [dets[i] for i in order[:n]]
         curve.append((n, diagonalize(pyci_ham, subset, nelec, max_cycle)))
     return curve, fci_energy
+
+
+def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000):
+    """(determinants sorted by |c| descending, fci_energy). Shared setup."""
+    wfn = pyci.fullci_wfn(pyci_ham.nbasis, *nelec)
+    wfn.add_all_dets()
+    op = pyci.sparse_op(pyci_ham, wfn)
+    energies, coeffs = op.solve(maxiter=max_cycle)
+    fci_energy = float(energies[0])
+    c = np.abs(np.asarray(coeffs[0]).ravel())
+
+    dets = _determinants_of(wfn)
+    if len(dets) != c.size:
+        raise RuntimeError(
+            f"extracted {len(dets)} determinants but got {c.size} coefficients."
+        )
+    check = diagonalize(pyci_ham, dets, nelec, max_cycle)
+    if abs(check - fci_energy) > 1e-8:
+        raise RuntimeError(
+            f"self-check failed: all-determinant diagonalization gave {check:.10f}, "
+            f"full CI is {fci_energy:.10f}; the extraction is wrong."
+        )
+    order = np.argsort(-c)
+    return [dets[i] for i in order], fci_energy
+
+
+def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
+                     progress=None):
+    """
+    Smallest top-|c| subspace whose energy is within `target_mha` of full CI.
+
+    Bisects on subspace size, so it costs ~log2(N_FCI) diagonalizations rather
+    than a full curve. Returns (n, fraction_of_ci_space, error_mha, fci_energy,
+    n_fci).
+
+    The answer is an UPPER bound on the requirement: top-|c| is overlap-optimal,
+    not energy-optimal (see oracle_curve), so some cleverer selection might reach
+    the same accuracy with fewer determinants. It is the right question to ask of
+    QSCI regardless, because |c|^2-distributed sampling is precisely what QSCI
+    does — this is the subspace size QSCI would need in the best case.
+    """
+    ordered, fci_energy = _full_ci_ordered(pyci_ham, nelec, max_cycle)
+    n_fci = len(ordered)
+
+    def err_mha(n):
+        e = diagonalize(pyci_ham, ordered[:n], nelec, max_cycle)
+        return (e - fci_energy) * 1000.0
+
+    # the full space always qualifies, so the search is well posed
+    lo, hi = 1, n_fci
+    hi_err = err_mha(hi)
+    if hi_err > target_mha:                       # only via a solver failure
+        return n_fci, 1.0, hi_err, fci_energy, n_fci
+
+    best = (hi, hi_err)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        e = err_mha(mid)
+        if progress:
+            progress(mid, e)
+        if e <= target_mha:
+            best, hi = (mid, e), mid
+        else:
+            lo = mid + 1
+    n, err = best
+    return n, n / n_fci, err, fci_energy, n_fci

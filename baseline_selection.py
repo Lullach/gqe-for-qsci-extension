@@ -87,9 +87,10 @@ def main():
     print(f"{'ndet':>7} {'energy (Ha)':>15} {'err vs FCI (mHa)':>18} {'% of CI':>10}")
     for ndet, e in orc:
         print(f"{ndet:>7} {e:>15.8f} {mha(e):>18.4f} {100.0*ndet/fci_dim:>9.2f}%")
-    print("  No method can beat this at a given size. An error here ABOVE")
-    print("  chemical accuracy means that subspace size cannot reach it at all")
-    print("  -- the cap is the limit, not the policy.")
+    print("  Top-n by |c| maximises OVERLAP with the exact state, which is what")
+    print("  |c|^2-distributed sampling converges to. It is NOT a proven floor on")
+    print("  the ENERGY: another n-subset can be lower (HCI targets energy via")
+    print("  |c|^2*(H_DD - E)), so read this as a strong reference, not a bound.")
     print("\n=== random selection (mean +/- std over 3 seeds) ===")
     print(f"{'ndet':>7} {'energy (Ha)':>15} {'err vs FCI (mHa)':>18} {'std (mHa)':>12}")
     for ndet, e, s in rnd:
@@ -106,9 +107,9 @@ def main():
         o_ndet, o_e = max(orc, key=lambda t: t[0])
         print(f">>> ORACLE reaches {mha(o_e):.3f} mHa at {o_ndet} determinants "
               f"({100.0*o_ndet/fci_dim:.2f}% of the CI space).")
-        print(">>> That IS the bound. QSCI near it -> the cap is the limit and no")
-        print(">>> policy work moves it. QSCI far above it -> a better subspace of")
-        print(">>> that size exists, and SELECTION is the limit.")
+        print(">>> Strong reference, not a proven floor. QSCI near it -> the cap is")
+        print(">>> the limit and policy work will not move it. QSCI far above it ->")
+        print(">>> a much better subspace of that size exists; SELECTION is the limit.")
         print()
     print(">>> HCI is a strong HEURISTIC reference, not a bound: it is greedy and")
     print(">>> its criterion is first-order PT. The real bound is the oracle (top-N")
