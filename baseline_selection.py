@@ -31,7 +31,8 @@ from hydra import compose, initialize
 from hydra.utils import instantiate
 
 from gqe_qsci.qsci.baseline import (
-    build_pyci_hamiltonian, hci_curve, random_curve, fci_dimension,
+    build_pyci_hamiltonian, hci_curve, random_curve, oracle_curve,
+    fci_dimension,
 )
 
 DIMS = [10, 20, 50, 100, 170, 300, 500, 1000]   # 170 = the paper's d_max;
@@ -70,6 +71,8 @@ def main():
     hci = hci_curve(build_pyci_hamiltonian(molecule), nelec, max_det=max(dims))
     print("running random selection ...")
     rnd = random_curve(build_pyci_hamiltonian(molecule), norb, nelec, dims, rng, n_seeds=3)
+    print("running ORACLE selection (full CI solve, then top-n by |c|) ...")
+    orc, _fci_check = oracle_curve(build_pyci_hamiltonian(molecule), nelec, dims)
 
     def mha(e):
         return (e - fci_energy) * 1000.0
@@ -79,6 +82,14 @@ def main():
     for ndet, e in hci:
         print(f"{ndet:>7} {e:>15.8f} {mha(e):>18.4f}")
 
+    print()
+    print("=== ORACLE (top-n of the exact FCI vector by |c|) ===")
+    print(f"{'ndet':>7} {'energy (Ha)':>15} {'err vs FCI (mHa)':>18} {'% of CI':>10}")
+    for ndet, e in orc:
+        print(f"{ndet:>7} {e:>15.8f} {mha(e):>18.4f} {100.0*ndet/fci_dim:>9.2f}%")
+    print("  No method can beat this at a given size. An error here ABOVE")
+    print("  chemical accuracy means that subspace size cannot reach it at all")
+    print("  -- the cap is the limit, not the policy.")
     print("\n=== random selection (mean +/- std over 3 seeds) ===")
     print(f"{'ndet':>7} {'energy (Ha)':>15} {'err vs FCI (mHa)':>18} {'std (mHa)':>12}")
     for ndet, e, s in rnd:
@@ -91,6 +102,14 @@ def main():
     print(f">>> HCI reaches {mha(largest[1]):.3f} mHa vs FCI at "
           f"{largest[0]} determinants "
           f"({100.0 * largest[0] / fci_dim:.2f}% of the CI space).")
+    if orc:
+        o_ndet, o_e = max(orc, key=lambda t: t[0])
+        print(f">>> ORACLE reaches {mha(o_e):.3f} mHa at {o_ndet} determinants "
+              f"({100.0*o_ndet/fci_dim:.2f}% of the CI space).")
+        print(">>> That IS the bound. QSCI near it -> the cap is the limit and no")
+        print(">>> policy work moves it. QSCI far above it -> a better subspace of")
+        print(">>> that size exists, and SELECTION is the limit.")
+        print()
     print(">>> HCI is a strong HEURISTIC reference, not a bound: it is greedy and")
     print(">>> its criterion is first-order PT. The real bound is the oracle (top-N")
     print(">>> by |c| from the exact FCI vector), which is not measured here.")
@@ -108,6 +127,8 @@ def main():
             w.writerow(["hci", ndet, e, mha(e), ""])
         for ndet, e, s in rnd:
             w.writerow(["random", ndet, e, mha(e), s * 1000])
+        for ndet, e in orc:
+            w.writerow(["oracle", ndet, e, mha(e), ""])
         w.writerow(["fci", fci_dim, fci_energy, 0.0, ""])
     print(f"\nsaved: {csv_path}")
 

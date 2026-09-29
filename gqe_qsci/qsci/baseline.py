@@ -139,3 +139,90 @@ def hci_curve(pyci_ham, nelec, max_det, eps_start=1e-2, eps_min=1e-8, max_cycle=
             curve.append((_ndet(wfn), float(energies[0])))
         eps *= 0.5
     return curve
+
+
+# ---------------------------------------------------------------------------
+# Oracle selection (the bound: what NO method can beat at a given size)
+# ---------------------------------------------------------------------------
+
+def _determinants_of(wfn):
+    """
+    Every determinant in `wfn`, as Determinant objects, in the wavefunction's
+    own order — so index i here matches coefficient i from op.solve().
+
+    pyci's accessor has moved between versions, hence the fallbacks. The caller
+    verifies the result rather than trusting it: see oracle_curve's self-check.
+    """
+    occs = None
+    for attr in ("to_occ_array", "to_occs_array"):
+        if hasattr(wfn, attr):
+            occs = np.asarray(getattr(wfn, attr)())
+            break
+    if occs is None:
+        raise RuntimeError(
+            "this pyci build exposes neither to_occ_array nor to_occs_array; "
+            "the oracle needs the determinant list to sort it by coefficient."
+        )
+
+    dets = []
+    for row in occs:                      # row: (2, nocc) occupied orbital indices
+        masks = []
+        for spin in (0, 1):
+            m = 0
+            for orbital in row[spin]:
+                m |= (1 << int(orbital))
+            masks.append(np.uint64(m))
+        dets.append(Determinant(masks))
+    return dets
+
+
+def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
+    """
+    (ndet, energy) for the BEST subspace of each size: take the exact FCI vector,
+    sort determinants by |c|, keep the top n, re-diagonalize.
+
+    This is what every selection heuristic — heat-bath CI, and QSCI's quantum
+    sampling — is approximating. It is not a method: it needs the answer first.
+    It is the bound that says whether a given subspace size CAN reach a given
+    accuracy at all, which is the difference between "the policy is the limit"
+    and "the cap is the limit".
+
+    Strictly it is a near-optimal bound rather than a provable one: a subspace's
+    variational energy is not a sum of independent per-determinant contributions,
+    so some other n-determinant set could in principle do slightly better. In
+    practice top-n by |c| is very close, and far tighter than HCI.
+
+    Self-checked: re-diagonalizing over ALL extracted determinants must reproduce
+    the full CI energy. If the extraction or the coefficient ordering were wrong,
+    that check fails loudly instead of returning a plausible bad curve.
+    """
+    wfn = pyci.fullci_wfn(pyci_ham.nbasis, *nelec)
+    wfn.add_all_dets()
+    op = pyci.sparse_op(pyci_ham, wfn)
+    energies, coeffs = op.solve(maxiter=max_cycle)
+    fci_energy = float(energies[0])
+    c = np.abs(np.asarray(coeffs[0]).ravel())
+
+    dets = _determinants_of(wfn)
+    if len(dets) != c.size:
+        raise RuntimeError(
+            f"extracted {len(dets)} determinants but got {c.size} coefficients; "
+            "pyci's determinant order does not match its coefficient order."
+        )
+
+    check = diagonalize(pyci_ham, dets, nelec, max_cycle)
+    if abs(check - fci_energy) > 1e-8:
+        raise RuntimeError(
+            f"oracle self-check failed: re-diagonalizing all {len(dets)} "
+            f"extracted determinants gave {check:.10f}, full CI is "
+            f"{fci_energy:.10f}. The determinant extraction is wrong, so any "
+            "oracle curve from it would be meaningless."
+        )
+
+    order = np.argsort(-c)                 # most important determinant first
+    curve = []
+    for n in dims:
+        n = min(int(n), len(dets))
+        subset = [dets[i] for i in order[:n]]
+        curve.append((n, diagonalize(pyci_ham, subset, nelec, max_cycle)))
+    return curve, fci_energy
