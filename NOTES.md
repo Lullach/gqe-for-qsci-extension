@@ -2446,3 +2446,63 @@ quality rather than the truncation floor. h12 is out of reach on both axes.
     eigenvector staying large (a truncated tail means determinants were wanted
     but excluded); the HF coefficient of the QSCI solution being far from the
     HCI-at-same-size value. Would let a run flag "raise coverage" by itself.
+
+## A law for the subspace requirement (2026-09-30)
+
+`hpc/entropy_scan.py` (compute, needs pyci -> container) and
+`hpc/plot_entropy_regression.py` (fit + figures, plain Python). Data in
+`data/subspace/entropy.csv`, 175 configurations.
+
+**The law.** On the rising branch, over 39 configurations and 8 octaves:
+
+    log2 n_needed  =  1.011 * R_{1/4}  +  0.408          R2 0.974, RMSE 0.33 bits
+
+`R_alpha` is the Renyi entropy of order alpha of the CI weight distribution
+|c_D|^2, in bits. The slope is 1 to within noise and the intercept is 0.4 bits,
+so this is not a fitted power law — it is
+
+    n_needed  ~=  1.33 * 2^{R_{1/4}}
+
+predicting the determinant count to within a factor of 1.25.
+
+**Why order 1/4 and not Shannon.** The first guess was Shannon (alpha = 1), on
+an asymptotic-equipartition argument: 2^H determinants capture all but eps of
+the WEIGHT. That is measurably wrong (R2 0.653) and fails worst at weak
+correlation, where HF holds ~98% of the weight, so H ~ 0, while the correlation
+energy lives entirely in the tail H ignores. Our target is an ENERGY criterion,
+so the right entropy is tail-weighted. R2 against alpha is a clean interior
+optimum:
+
+    alpha    0.10   0.15   0.25   0.50   0.75   1.00   2.00
+    R2       0.835  0.901  0.974  0.908  0.757  0.653  0.499
+
+alpha -> 0 degenerates to log2(support), which carries no information; alpha >= 1
+weights the mode, which is HF. Note alpha < 1 is also exactly the condition under
+which MPS truncation error is guaranteed to decay quickly.
+
+**Two things it does NOT do yet.**
+
+1. *It is not predictive.* R_{1/4} needs the exact vector. The cheap CISD
+   surrogate degrades it to R2 0.840 with slope **1.86** — CISD truncates
+   precisely the tail a tail-weighted measure depends on, so it underestimates
+   the entropy by about half. The descriptor is right; the surrogate is wrong.
+   Next candidates are CCSD amplitudes or a short HCI/ENPT2 pass, NOT a
+   different entropy.
+2. *It does not survive past dissociation.* Including the post-peak branch drops
+   R2 to 0.747, with those points falling BELOW the line — fewer determinants
+   needed than their weight spread implies. Physically clear: past dissociation
+   the extra determinants are near-degenerate spin couplings carrying weight but
+   almost no energy. No weight-based measure can see this; the fix is to weight
+   by |c_D|^2 * (H_DD - E), which is the ENPT2 / HCI criterion. `pyci` has
+   `compute_enpt2`.
+
+**The count linearises; the fraction does not.** Best R2 for -log2(fraction) is
+0.594, against 0.974 for log2 n_needed. The fraction is a difference of two
+large quantities, so it amplifies the error. Ask "how many determinants", not
+"what share".
+
+**Also settled: the global median in the earlier scan was meaningless.** 103 of
+196 configurations have fewer than 1,000 determinants in total ("h2 needs 50%"
+is 2 of 4). Restricted to >= 3,000 determinants the median requirement is
+**4.35%**, not 11.25% — just under the `coverage: 0.05` we run. So that default
+was always fine for ordinary molecules and specifically wrong for H-chains.
