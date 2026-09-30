@@ -308,6 +308,79 @@ edge_srcs/dsts = [] []
 
 Each step: `_step_forward` → `_scaled_logits` → sample → `_advance_dag`.
 
+#### If you have not worked with a GNN before
+
+The job is to turn "the circuit built so far" into one fixed-size vector that a
+head can score operators against. A transformer would do that over a *sequence*
+of gates. Here the object is a graph — gates connected along the qubit wires
+they share — and a graph neural network is the machinery for summarizing one.
+
+**The one idea: repeated neighbourhood mixing.** Every node starts with its own
+vector (stages 1–2 below). Then a *round of message passing* has each node look
+at the nodes it is connected to, combine their vectors into one message, and
+update itself with it. Nothing else. The consequence is the useful part: after
+one round a node's vector reflects its immediate neighbours, after two rounds it
+reflects neighbours-of-neighbours, and after $k$ rounds everything within $k$
+**hops**. Our `num_layers = 6` means a gate node can be influenced by gates up to
+six steps back along its wires.
+
+**GAT = attention over neighbours.** The simplest version averages the
+neighbours' vectors equally. A *graph attention network* instead learns how much
+each neighbour matters: for an edge $i \leftarrow j$ it scores
+$e_{ij} = \mathrm{LeakyReLU}\big(a^\top [W h_i \,\Vert\, W h_j]\big)$, softmaxes
+those scores over $i$'s neighbours to get weights $\alpha_{ij}$ summing to 1, and
+aggregates $\sum_j \alpha_{ij} W h_j$. So a gate can learn to care more about
+what happened on one wire than another. `heads=4` runs four independent attention
+functions and `concat=False` averages them, which keeps the width at $H$ so the
+residual below still lines up.
+
+**One round, concretely.** Take the graph after step 0 — wires 0, 1, 4, 5 feed
+gate node `g6`; wires 2, 3 are untouched — and give every node a 2-dimensional
+vector (real $H$ is 128; two is just legible). PyG's `GATConv` adds a **self-loop**
+by default, so `g6` attends to itself as well as to its four wires:
+
+```mermaid
+flowchart LR
+  q0(("q0<br/>[1.0, 0.0]")) -- "α=0.20" --> g6
+  q1(("q1<br/>[0.8, 0.2]")) -- "α=0.15" --> g6
+  q4(("q4<br/>[0.9, 0.1]")) -- "α=0.20" --> g6
+  q5(("q5<br/>[0.7, 0.3]")) -- "α=0.15" --> g6
+  g6["g6 [0.0, 0.5]"] -- "α=0.30 (self)" --> g6
+  classDef n stroke:#1971c2,stroke-width:3px
+  class g6 n
+```
+
+$$\textstyle\sum_j \alpha_j h_j = 0.30[0, 0.5] + 0.20[1, 0] + 0.15[0.8, 0.2] + 0.20[0.9, 0.1] + 0.15[0.7, 0.3] = [0.605,\ 0.245]$$
+
+That aggregate then goes through the layer's **LayerNorm → GELU → residual**:
+$\mathrm{LN}([0.605, 0.245]) = [1, -1]$, $\mathrm{GELU} = [0.841, -0.159]$, and
+adding the old vector gives $h_{g6} = [0.841, 0.341]$. The residual is why six
+rounds do not destroy the input: each layer *adds* a correction instead of
+replacing the vector. Without it, repeated neighbour-averaging drives every node
+toward the same vector — the standard over-smoothing failure of deep GNNs.
+
+Wires 2 and 3 have no neighbours at this point, so they aggregate only their own
+self-loop and still come out defined: $[0.041, 1.841]$ and $[-0.059, 1.741]$.
+(Unplaced gate slots are updated the same way and then ignored — pooling reads
+frontier nodes only.)
+
+**Then pooling**, which is what makes the multiplicity in stage 4 concrete. The
+frontier is `[6,6,2,3,6,6]`, so averaging over the six *wires* gives
+
+$$\frac{4 h_{g6} + h_{q2} + h_{q3}}{6} = [0.558,\ 0.825]$$
+
+whereas averaging over the three *distinct* nodes would give $[0.275, 1.308]$ — a
+materially different query. `g6` counts four times because it is the frontier of
+four wires.
+
+**Why a graph instead of a sequence.** Gate 9 in §2.2's trace neighbours gates 6,
+7 and 8 because it shares wires with them — not because of where they sit in the
+token sequence. Reordering two commuting gates produces the *same* graph, so the
+context vector is unchanged, whereas a sequence model would see two different
+inputs. (That may also be why canonical masking measured no effect in §2.3: the
+representation was already largely insensitive to the orderings the mask removes.
+A hypothesis, not a measurement.)
+
 #### How one gate actually gets chosen
 
 The distribution over the next operator depends **only on the partial DAG**, so
