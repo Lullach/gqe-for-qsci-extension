@@ -258,33 +258,32 @@ def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000, selfcheck=True):
     return [dets[i] for i in order], fci_energy
 
 
-def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
-                     progress=None, selfcheck=True):
+def bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha=1.6,
+                   max_cycle=1000, progress=None):
     """
-    Smallest top-|c| subspace whose energy is within `target_mha` of full CI.
+    Smallest PREFIX of `ordered` whose energy is within `target_mha` of
+    `fci_energy`. Returns (n, error_mha).
 
-    Bisects on subspace size, so it costs ~log2(N_FCI) diagonalizations rather
-    than a full curve. Returns (n, fraction_of_ci_space, error_mha, fci_energy,
-    n_fci).
+    Bisection, so ~log2(N) diagonalizations rather than a full curve. It assumes
+    the error is monotone in prefix length; that holds for any sensible ranking
+    but is not guaranteed determinant by determinant, so treat a result as the
+    smallest prefix the bisection FOUND rather than a proven minimum.
 
-    The answer is an UPPER bound on the requirement: top-|c| is overlap-optimal,
-    not energy-optimal (see oracle_curve), so some cleverer selection might reach
-    the same accuracy with fewer determinants. It is the right question to ask of
-    QSCI regardless, because |c|^2-distributed sampling is precisely what QSCI
-    does — this is the subspace size QSCI would need in the best case.
+    Split out of minimal_subspace so that a different ranking — by energy
+    contribution rather than by |c| — measures the same thing through the same
+    code. See hpc/energy_vs_overlap.py.
     """
-    ordered, fci_energy = _full_ci_ordered(pyci_ham, nelec, max_cycle, selfcheck)
-    n_fci = len(ordered)
+    n_total = len(ordered)
 
     def err_mha(n):
         e = diagonalize(pyci_ham, ordered[:n], nelec, max_cycle)
         return (e - fci_energy) * 1000.0
 
     # the full space always qualifies, so the search is well posed
-    lo, hi = 1, n_fci
+    lo, hi = 1, n_total
     hi_err = err_mha(hi)
     if hi_err > target_mha:                       # only via a solver failure
-        return n_fci, 1.0, hi_err, fci_energy, n_fci
+        return n_total, hi_err
 
     best = (hi, hi_err)
     while lo < hi:
@@ -296,5 +295,25 @@ def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
             best, hi = (mid, e), mid
         else:
             lo = mid + 1
-    n, err = best
+    return best
+
+
+def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
+                     progress=None, selfcheck=True):
+    """
+    Smallest top-|c| subspace whose energy is within `target_mha` of full CI.
+
+    Returns (n, fraction_of_ci_space, error_mha, fci_energy, n_fci).
+
+    The answer is an UPPER bound on the requirement: top-|c| is overlap-optimal,
+    not energy-optimal (see oracle_curve), so some cleverer selection might reach
+    the same accuracy with fewer determinants. It is the right question to ask of
+    QSCI regardless, because |c|^2-distributed sampling is precisely what QSCI
+    does — this is the subspace size QSCI would need in the best case.
+    hpc/energy_vs_overlap.py measures how loose the bound actually is.
+    """
+    ordered, fci_energy = _full_ci_ordered(pyci_ham, nelec, max_cycle, selfcheck)
+    n_fci = len(ordered)
+    n, err = bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha,
+                            max_cycle, progress)
     return n, n / n_fci, err, fci_energy, n_fci

@@ -36,26 +36,21 @@ import numpy as np
 # therefore the only kind that could ever be used predictively; "_fci" columns
 # are diagnostics that say how much of the error is the CISD surrogate and how
 # much is the descriptor itself.
-PREDICTORS = [
-    ("R0.1_cisd",  "Renyi 0.10 (CISD)"),
-    ("R0.15_cisd", "Renyi 0.15 (CISD)"),
-    ("R0.25_cisd", "Renyi 1/4 (CISD)"),
-    ("R0.5_cisd",  "Renyi 1/2 (CISD)"),
-    ("R0.75_cisd", "Renyi 3/4 (CISD)"),
-    ("H_cisd",     "Shannon (CISD)"),
-    ("R2_cisd",    "Renyi 2 (CISD)"),
-    ("S_cisd",     "marginal sum (CISD)"),
-    ("c_hf2_cisd", "|c_HF|^2 (CISD)"),
-    ("R0.1_fci",   "Renyi 0.10 (exact)"),
-    ("R0.15_fci",  "Renyi 0.15 (exact)"),
-    ("R0.25_fci",  "Renyi 1/4 (exact)"),
-    ("R0.5_fci",   "Renyi 1/2 (exact)"),
-    ("R0.75_fci",  "Renyi 3/4 (exact)"),
-    ("H_fci",      "Shannon (exact)"),
-    ("R2_fci",     "Renyi 2 (exact)"),
-    ("S_fci",      "marginal sum (exact)"),
-    ("log2_n_fci", "log2 CI dimension"),
-]
+_ORDERS = [("R0.1", "Renyi 0.10"), ("R0.15", "Renyi 0.15"),
+           ("R0.25", "Renyi 1/4"), ("R0.5", "Renyi 1/2"),
+           ("R0.75", "Renyi 3/4"), ("H", "Shannon"), ("R2", "Renyi 2")]
+
+# "E" prefixed columns are the same entropies of the ENERGY-weighted
+# distribution |c_D|^2 (H_DD - E) instead of the weight distribution |c_D|^2.
+PREDICTORS = []
+for _src, _srclab in (("cisd", "CISD"), ("fci", "exact")):
+    for _pre, _prelab in (("", "weight"), ("E", "energy")):
+        for _k, _lab in _ORDERS:
+            PREDICTORS.append((f"{_pre}{_k}_{_src}",
+                               f"{_lab} {_prelab[:3]} ({_srclab})"))
+    PREDICTORS += [(f"S_{_src}", f"marginal sum ({_srclab})"),
+                   (f"c_hf2_{_src}", f"|c_HF|^2 ({_srclab})")]
+PREDICTORS.append(("log2_n_fci", "log2 CI dimension"))
 
 TARGETS = [
     ("log2_n_needed", "log2 n_needed"),
@@ -129,11 +124,11 @@ def fit(xs, ys):
     return b, a, r2, float(np.sqrt((resid ** 2).mean())), x.size
 
 
-def score_table(rows, target_key, target_label, subsets):
+def score_table(rows, target_key, target_label, subsets, top=None):
     print(f"\n\n=== predicting {target_label} ===")
-    head = f"{'predictor':<22}" + "".join(f"{name:>26}" for name, _ in subsets)
+    head = f"{'predictor':<26}" + "".join(f"{name:>26}" for name, _ in subsets)
     print(head)
-    print(f"{'':<22}" + "".join(f"{'R2      rmse   slope':>26}" for _ in subsets))
+    print(f"{'':<26}" + "".join(f"{'R2      rmse   slope':>26}" for _ in subsets))
     print("-" * len(head))
     ranked = []
     for key, label in PREDICTORS:
@@ -148,10 +143,13 @@ def score_table(rows, target_key, target_label, subsets):
             if i == 0:
                 primary = r2
         ranked.append((primary if primary is not None else -9, label, key, cells))
-    for _, label, key, cells in sorted(ranked, reverse=True):
-        print(f"{label:<22}" + "".join(cells))
+    ranked.sort(reverse=True)
+    for _, label, key, cells in (ranked[:top] if top else ranked):
+        print(f"{label:<26}" + "".join(cells))
+    if top and len(ranked) > top:
+        print(f"{'':<26}  ... {len(ranked) - top} weaker predictor(s) not shown")
 
-    ordering = [(lab, k) for _, lab, k, _ in sorted(ranked, reverse=True)]
+    ordering = [(lab, k) for _, lab, k, _ in ranked]
 
     # The slope alone is not enough to claim a law: state the intercept too, so
     # "slope 1" can be read as n_needed = 2^(x + a) rather than just a good fit.
@@ -238,6 +236,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default="data/subspace/entropy.csv")
     ap.add_argument("--out", default="figures_entropy")
+    ap.add_argument("--top", type=int, default=16,
+                    help="rows of the score table to print (0 = all)")
     ap.add_argument("--min-ci", type=int, default=1000,
                     help="drop CI spaces smaller than this: 'h2 needs 50%%' is "
                          "2 determinants of 4 and no asymptotic law applies")
@@ -256,7 +256,7 @@ def main():
 
     best = {}
     for tkey, tlabel in TARGETS:
-        ordering = score_table(kept, tkey, tlabel, subsets)
+        ordering = score_table(kept, tkey, tlabel, subsets, args.top or None)
         best[tkey] = ordering
 
     try:

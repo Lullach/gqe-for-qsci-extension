@@ -2506,3 +2506,56 @@ large quantities, so it amplifies the error. Ask "how many determinants", not
 is 2 of 4). Restricted to >= 3,000 determinants the median requirement is
 **4.35%**, not 11.25% — just under the `coverage: 0.05` we run. So that default
 was always fine for ordinary molecules and specifically wrong for H-chains.
+
+## Energy vs overlap selection, and what the dissociation collapse really was (2026-09-30)
+
+Two results from `hpc/energy_vs_overlap.py` and the ENPT2 weighting added to
+`hpc/entropy_scan.py`. Data: `data/subspace/energy_vs_overlap.csv` (165
+configurations), `data/subspace/tight_target_h8.csv`.
+
+**1. The overlap/energy gap is negligible — stop worrying about it.** Ranking
+determinants by the Epstein-Nesbet energy contribution |c_D|^2 (H_DD - E)
+instead of by |c_D| changes the requirement by a geometric mean factor of
+**1.01** over 165 configurations. Median 1.00; 137/165 within 5%, 155/165 within
+10%. The extremes are counting artifacts at tiny subspaces (lih 7 -> 5
+determinants, hf 1 -> 2), not a real effect. On the largest case tested, h10 at
+1.9 A, it is 21,637 vs 21,616.
+
+So the standing caveat — "the oracle is overlap-optimal, not energy-optimal, and
+therefore an UPPER bound" — is formally still true but quantitatively empty. The
+bound is tight to ~1%. Keep the caveat in one sentence; stop treating it as a
+threat to the numbers.
+
+**2. ENPT2-weighted entropies barely help, which is consistent.** Recomputing the
+Renyi entropies on the energy-weighted distribution raises the all-configuration
+R2 from 0.747 to only 0.765, and on the rising branch weight-based R_{1/4}
+(0.974) still beats every energy-weighted variant (best: R_{1/2} energy, 0.961).
+That follows from result 1: if the two rankings select nearly the same subspace,
+the two weightings cannot carry very different information. My prediction that
+energy weighting would fix the post-dissociation branch was WRONG.
+
+**3. What actually causes the collapse: the accuracy target, not the physics.**
+CORRECTION to the 2026-09-29 entry "difficulty is non-monotonic in bond length".
+Re-running h8 at a 10x tighter target:
+
+    r (A)        2.16   2.47   2.78   3.09   3.40
+    1.60 mHa     1754   1693   1238     92     94     <- 19x cliff
+    0.16 mHa     2161   2175   2146   2108   1845     <- no cliff at all
+
+At dissociation the ENTIRE missing manifold spans less than 1.6 mHa, so chemical
+accuracy comes for free. Tighten the target and the requirement simply saturates
+at ~44% and stays there. The rise-and-fall shape is therefore a property of the
+1.6 mHa threshold, not of the wavefunction — which is also why no wavefunction
+descriptor could predict it, and why the entropy law breaks exactly there.
+
+Consequences worth carrying:
+  * The non-monotonicity claim must be stated as "at chemical accuracy", never
+    as a property of the electronic structure.
+  * Benchmarking QSCI at stretched geometries can flatter it: past dissociation
+    the problem is easy in absolute terms even though the state is maximally
+    spread. h10 at 3.1 A needing 0.59% is this effect, not an easy molecule.
+  * Predicted and untested: at a tight target the entropy law should hold at ALL
+    geometries, not just the rising branch. h8's tight-target counts saturate in
+    step with R_{1/4}, which is suggestive but is 10 points in one family.
+    The test is a tight-target rerun of the fast families (<= 4,900 determinants,
+    seconds each) followed by the same regression.

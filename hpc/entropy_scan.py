@@ -145,23 +145,44 @@ def _renyi_bits(w, alpha):
     return float(np.log2((nz ** alpha).sum()) / (1.0 - alpha))
 
 
-def entropy_bits(wfn, coeffs, nbasis, nelec):
+def _spectral(w, prefix=""):
+    """Every entropy of one normalised weight vector, in bits."""
+    out = {f"{prefix}H": _renyi_bits(w, 1.0), f"{prefix}c_hf2": float(w.max())}
+    for alpha in RENYI_ORDERS:
+        out[f"{prefix}R{alpha:g}"] = _renyi_bits(w, alpha)
+    return out
+
+
+def entropy_bits(wfn, coeffs, nbasis, nelec, gap=None):
     """
     Spectral and marginal entropies of one solved wavefunction, all in bits.
 
     Returns (S, spectral) where
       S            = sum over spin-orbitals of h(<n_i>) -- the CHEAP quantity,
                      obtainable from a 1-RDM without any exact solve
-      spectral["H"]      = Shannon entropy of |c|^2, the quantity in (1)
+      spectral["H"]      = Shannon entropy of |c|^2
       spectral["R<a>"]   = Renyi entropy of order a
       spectral["c_hf2"]  = largest single weight, i.e. |c_HF|^2 for these states
+
+    With `gap` = H_DD - E, the same quantities are also computed for the
+    ENERGY-weighted distribution, under the "E" prefix. Epstein-Nesbet puts the
+    energy a determinant contributes at |c_D|^2 * (H_DD - E), so that is the
+    distribution an energy criterion is actually sensitive to — as against
+    |c_D|^2, which is what OVERLAP is sensitive to. Past dissociation the two
+    come apart badly: the extra determinants are near-degenerate spin couplings
+    with real weight and almost no energy, so the plain entropies stay high
+    while the requirement collapses.
     """
     w = np.asarray(coeffs, dtype=float).ravel() ** 2
     w /= w.sum()                                  # solver normalisation is not exact
 
-    spectral = {"H": _renyi_bits(w, 1.0), "c_hf2": float(w.max())}
-    for alpha in RENYI_ORDERS:
-        spectral[f"R{alpha:g}"] = _renyi_bits(w, alpha)
+    spectral = _spectral(w)
+    if gap is not None:
+        we = w * np.asarray(gap, dtype=float)
+        we = np.clip(we, 0.0, None)      # H_DD >= E variationally; guard rounding
+        total = we.sum()
+        spectral.update(_spectral(we / total, prefix="E") if total > 0
+                        else {k: float("nan") for k in _spectral(w, "E")})
 
     p = marginal_occupations(wfn, w, nbasis)
     got = p.sum(axis=1)
@@ -181,7 +202,35 @@ def entropy_bits(wfn, coeffs, nbasis, nelec):
 def _solve(ham, wfn, max_cycle):
     op = pyci.sparse_op(ham, wfn)
     energies, coeffs = op.solve(maxiter=max_cycle)
-    return float(energies[0]), coeffs[0]
+    return float(energies[0]), coeffs[0], op
+
+
+def diagonal(op, n):
+    """
+    H_DD for every determinant, from the operator already built for the solve.
+
+    pyci exposes `data`/`indices`/`indptr` as opaque scalars rather than CSR
+    arrays, so `get_element` is the way in. It is fast (microseconds per call)
+    and, unlike the CSR route, documented. `ecore` is stored separately and must
+    be added back: without it the diagonal sits below the variational minimum.
+    """
+    return np.fromiter((op.get_element(i, i) for i in range(n)),
+                       dtype=float, count=n) + op.ecore
+
+
+def _entropies(ham, wfn, nelec, max_cycle):
+    """Solve, take the diagonal, and return both weight- and energy-weighted
+    entropies. The variational check E <= min(H_DD) catches an ecore slip."""
+    energy, c, op = _solve(ham, wfn, max_cycle)
+    n = _ndet(wfn)
+    diag = diagonal(op, n)
+    if energy > diag.min() + 1e-6:
+        raise RuntimeError(
+            f"E = {energy:.10f} is above min(H_DD) = {diag.min():.10f}; the "
+            "diagonal is wrong (ecore?), so the energy weighting would be too."
+        )
+    S, spectral = entropy_bits(wfn, c, ham.nbasis, nelec, gap=diag - energy)
+    return S, spectral, energy, n
 
 
 def cisd_entropy(ham, nelec, max_cycle=1000):
@@ -190,17 +239,14 @@ def cisd_entropy(ham, nelec, max_cycle=1000):
     wfn.add_hartreefock_det()
     for order in (1, 2):
         wfn.add_excited_dets(order)
-    energy, c = _solve(ham, wfn, max_cycle)
-    S, spectral = entropy_bits(wfn, c, ham.nbasis, nelec)
-    return S, spectral, energy, _ndet(wfn)
+    return _entropies(ham, wfn, nelec, max_cycle)
 
 
 def fci_entropy(ham, nelec, max_cycle=1000):
     """Entropies of the exact vector — the surrogate check and the theory check."""
     wfn = pyci.fullci_wfn(ham.nbasis, *nelec)
     wfn.add_all_dets()
-    energy, c = _solve(ham, wfn, max_cycle)
-    S, spectral = entropy_bits(wfn, c, ham.nbasis, nelec)
+    S, spectral, energy, _ = _entropies(ham, wfn, nelec, max_cycle)
     return S, spectral, energy
 
 
@@ -213,8 +259,10 @@ def hf_entropy(ham, nelec):
     return S
 
 
-# every spectral quantity, in the order the CSV stores them
-SPECTRAL_KEYS = ["H"] + [f"R{a:g}" for a in RENYI_ORDERS] + ["c_hf2"]
+# every spectral quantity, in the order the CSV stores them. The "E" copies are
+# the same entropies of the ENERGY-weighted distribution |c_D|^2 (H_DD - E).
+BASE_KEYS = ["H"] + [f"R{a:g}" for a in RENYI_ORDERS] + ["c_hf2"]
+SPECTRAL_KEYS = BASE_KEYS + [f"E{k}" for k in BASE_KEYS]
 
 
 def _ndet(wfn):
@@ -305,7 +353,8 @@ def main():
     print(f"writing {args.out}\n")
 
     hdr = (f"{'config':<14}{'CI space':>10}{'needed':>8}{'log2 n':>8}"
-           f"{'S_cisd':>9}{'R0.5cis':>9}{'H_fci':>8}{'R0.5fci':>9}{'secs':>7}")
+           f"{'R.25cis':>9}{'ER.25cis':>10}{'R.25fci':>9}{'ER.25fci':>10}"
+           f"{'secs':>7}")
     print(hdr)
     print("-" * len(hdr))
 
@@ -360,9 +409,9 @@ def main():
                 return " " * (w - 2) + "-" + " " if math.isnan(x) else f"{x:>{w}.2f}"
 
             print(f"{label:<14}{n_fci:>10,}{n_needed:>8,}"
-                  f"{math.log2(n_needed):>8.2f}{s_cisd:>9.2f}"
-                  f"{sp_cisd['R0.5']:>9.2f}{f(sp_fci['H'], 8)}"
-                  f"{f(sp_fci['R0.5'])}{secs:>7.1f}")
+                  f"{math.log2(n_needed):>8.2f}{sp_cisd['R0.25']:>9.2f}"
+                  f"{sp_cisd['ER0.25']:>10.2f}{f(sp_fci['R0.25'])}"
+                  f"{f(sp_fci['ER0.25'], 10)}{secs:>7.1f}")
 
             writer.writerow(
                 [label, fam, f"{r:.2f}", basis, ne, no, n_fci, n_needed,
