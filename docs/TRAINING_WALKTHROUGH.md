@@ -308,6 +308,93 @@ edge_srcs/dsts = [] []
 
 Each step: `_step_forward` → `_scaled_logits` → sample → `_advance_dag`.
 
+#### How one gate actually gets chosen
+
+The distribution over the next operator depends **only on the partial DAG**, so
+the policy is a proper autoregressive factorization
+$p_\theta(a_1 \ldots a_L) = \prod_t p_\theta(a_t \mid \mathrm{DAG}_{t-1})$ —
+which is why §2.4 can replay it exactly. One step runs five stages:
+
+| # | stage | shape | what it contributes |
+|---|---|---|---|
+| 1 | node embeddings via `_node_table()` | $(B, n_q{+}L, H)$ | *what* each node is |
+| 2 | add `frontier_embedding(flag)` | same | *which* nodes are still exposed |
+| 3 | GAT message passing | same | *context*: what happened upstream on my wires |
+| 4 | gather frontier, mean over wires | $(B, H)$ | the query — "state of the circuit now" |
+| 5 | `operator_head` → $-\beta$ → mask → sample | $(B, V)$ | the choice |
+
+**1. Every node carries a vector chosen by its token.** Wire $q$ takes row $q$; a
+filled slot holding operator $k$ takes row $n_q + k$; an empty slot takes the
+`UNPLACED` row. Under `feature_scorer: true` those rows are *composed* rather
+than looked up: wires from `qubit_encoder(orbital_features)`, gate nodes from
+`operator_head.keys()`. So a placed gate's node embedding **is** the operator's
+key — the same vector used to score it at the output. That weight tying is what
+makes "I already used this operator upstream" legible to the same geometry that
+decides what to use next.
+
+**2. The frontier flag is a separate additive embedding**, not part of the node
+identity: $x = \text{node} + \text{frontier\_embedding}(0\ \text{or}\ 1)$. Without
+it the GNN could not tell a gate still exposed on some wire from one already
+buried behind a later gate. `scatter_` sets the flag, so a node that is the
+frontier of four wires still gets flag 1 once.
+
+**3. Message passing** runs `num_layers` GAT layers over the symmetrized edges,
+each residual and pre-normed: $h \leftarrow h + \mathrm{GELU}(\mathrm{LN}(\mathrm{GAT}(h, E)))$,
+4 heads averaged (`concat=False`) so $H$ is preserved. This is where "what has
+already been applied to *my* qubits" reaches a node — one hop per layer, so 6
+layers see 6 gates back along a wire. **At step 0 there are no edges, so the loop
+body is skipped entirely** and $h = x$: the first gate is chosen from orbital
+physics and nothing else.
+
+**4. Pooling builds the query** — gather the $n_q$ frontier nodes and average.
+Note the gather is *per wire*, not per distinct node, so a gate sitting at the
+frontier of four wires enters the mean four times. Wide gates dominate the
+context, which is the imbalance §2.2's step 1 points out.
+
+**5. Scoring.** `operator_head(pooled)` gives one number per operator: a free
+`Linear(H, V)` column in integer-ID mode, or in feature mode
+
+$$z_k = \frac{\langle \text{pooled},\ \text{key}_k \rangle}{\sqrt{H}}, \qquad \text{key}_k = \mathrm{op\_encoder}(\tilde{f}_k)$$
+
+with $\tilde f_k$ the z-scored feature row of operator $k$. So the choice is a
+**dot product between the circuit-context vector and each operator's
+physics-derived key** — geometric alignment, not a table lookup, which is exactly
+what lets the same weights score a different molecule's menu.
+
+Then the Boltzmann convention: the head's output is a *pseudo-energy*, and
+sampling uses $-\beta z$, so **low $z$ means likely**. The canonical mask sets
+forbidden entries to $-\infty$ *after* that multiply (§2.3), and
+`Categorical(logits=scaled).sample()` draws.
+
+Worked for step 1 of the trace below, with a toy $H = 4$,
+$\text{pooled} = [0.8, -0.3, 0.5, 0.1]$, $\beta = 0.5$, prefix `[3]` forbidding
+$\{0, 2\}$:
+
+| op | $z_k$ | $-\beta z_k$ | after mask | $p$ |
+|---|---|---|---|---|
+| 0 (identity) | $+0.025$ | $-0.013$ | $-\infty$ | 0 |
+| 1 | $-0.382$ | $+0.191$ | $+0.191$ | **0.259** |
+| 2 | $+0.240$ | $-0.120$ | $-\infty$ | 0 |
+| 3 | $-0.295$ | $+0.148$ | $+0.148$ | 0.248 |
+| 4 | $-0.025$ | $+0.013$ | $+0.013$ | 0.217 |
+| 5 | $-0.510$ | $+0.255$ | $+0.255$ | 0.276 |
+
+Two things worth reading off this. Operator 5 is the *most* likely and operator 1
+is what gets drawn — it is sampling, not `argmax`, and at $\beta = 0.5$ early in
+training the distribution over allowed operators is nearly flat (0.22–0.28).
+And $\log p = \ln 0.259 = -1.35$, which is the step-1 entry of the log-prob
+vector in §2.4.
+
+What the policy **cannot** see is as important: there is no quantum state here,
+no energy, no reward signal, and no notion of which excitations matter. The graph
+carries only structure plus each operator's static features. Everything about
+"which gates give low energy" arrives solely through GRPO pushing $z_k$ down for
+operators that appeared in good circuits — which is why the first gate, chosen
+with the GAT skipped and no structure at all, is learned almost entirely through
+that pressure on the keys.
+
+#### The trace
+
 In the diagrams below, **orange** marks the current frontier — the nodes that get
 pooled into the query for the *next* gate — and **blue** the gate just placed.
 A freshly placed gate is always in the frontier too (it just overwrote the
@@ -444,6 +531,11 @@ Operator $k$ is forbidden at step $t$ iff
 
 $$\exists\, i < t \ :\ \big[k,\ \texttt{prefix}[m]\big] = 0 \ \ \forall m \in [i, t-1] \quad\text{and}\quad k < \texttt{prefix}[i]$$
 
+In words: operator $k$ is forbidden at step $t$ if there's some earlier point $i$ in the prefix such that:
+
+$k$ commutes with everything placed since $i$ (positions $i$ through $t-1$), and
+$k$'s index is smaller than the operator that was placed at $i$.
+If both hold, it means: "$k$ could have been slotted in at position $i$ instead — nothing between $i$ and now would have cared, since they all commute with $k$ — and if it had been, it would've come before prefix[i] in sorted order." Placing $k$ now instead of back then would produce a non-sorted (non-canonical) ordering of that commuting run. So it's banned — not because $k$ is physically wrong, but because a smaller-index equivalent slot for it already passed.
 This keeps one representative per Mazurkiewicz **trace class** — the equivalence
 classes of a free partially commutative monoid, where commuting gates are only
 spellable in their sorted order ([Mazurkiewicz,
