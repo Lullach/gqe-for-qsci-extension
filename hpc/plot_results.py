@@ -47,8 +47,21 @@ STAGES = ["GQE-optimized(best_so_far)", "Global-refined(best_so_far)"]
 NUMERIC = {
     "n_params", "seed", "epoch", "sample_idx", "energy", "R-CASCI", "R-CCSD",
     "subspace_dim", "num_sampled_basis", "num_symmetry_preserving_basis",
-    "cx_count", "total_gates",
+    "cx_count", "total_gates", "tail_weight", "boundary_mha", "pt2_mha",
 }
+
+# Subspace-size indicators (gqe_qsci/qsci/diagnostics.py). "Hot" means the
+# indicator says the subspace is still limiting the energy. Thresholds: ENPT2 at
+# chemical accuracy; the two boundary ones from the exact-vector calibration.
+# They are LOGGED, never acted on — pt2 is the reliable one, the boundary pair
+# flickers on sampled subspaces. See NOTES.md, "Live subspace-size indicators".
+INDICATORS = [
+    ("pt2", "pt2_mha", lambda v: abs(v) > CHEMICAL_ACCURACY_MHA),
+    ("tail", "tail_weight", lambda v: v > 1e-5),
+    ("boundary", "boundary_mha", lambda v: v > 0.1),
+]
+PLATEAU_WINDOW = 25      # epochs
+PLATEAU_DELTA = 1.0      # mHa: less improvement than this over the window
 
 SEED_SUFFIX = re.compile(r"-s\d+$")
 
@@ -175,6 +188,65 @@ def summarize(rows):
                         else f"{stats.mean(ps):.0f}% +/- {stats.stdev(ps):.0f}")
                 print(f"    {fam:<26} {stage:<30} {cell:>14}")
             print("    low % = training continued long after the policy stopped improving")
+
+        _indicator_report(mol_rows)
+
+
+def _indicator_report(rows):
+    """
+    Did the subspace-size indicators fire, and when?
+
+    "fired" = the first epoch at which the best-so-far error had plateaued
+    (improved by less than PLATEAU_DELTA mHa over PLATEAU_WINDOW epochs) WHILE
+    the indicator was hot. That is the point where a run could have been told
+    "this plateau is the subspace, not the policy". Nothing acts on it.
+
+    Runs from before the indicator columns existed are skipped silently.
+    """
+    runs = defaultdict(list)          # (family, stage, exp_tag) -> rows
+    for r in rows:
+        if r["stage"] in STAGES and r["err_mha"] is not None \
+                and r.get("pt2_mha") is not None:
+            runs[(family(r), r["stage"], r["exp_tag"])].append(r)
+    if not runs:
+        return
+
+    fired = defaultdict(lambda: defaultdict(list))   # (fam, stage) -> name -> [epoch|None]
+    last = defaultdict(list)                         # (fam, stage) -> [final pt2]
+    for (fam, stage, _tag), rs in runs.items():
+        rs.sort(key=lambda r: r["epoch"])
+        err = {r["epoch"]: r["err_mha"] for r in rs}
+        last[(fam, stage)].append(abs(rs[-1]["pt2_mha"]))
+        for name, column, hot in INDICATORS:
+            epoch = None
+            for r in rs:
+                past = err.get(r["epoch"] - PLATEAU_WINDOW)
+                value = r.get(column)
+                if past is None or value is None:
+                    continue
+                if past - r["err_mha"] < PLATEAU_DELTA and hot(value):
+                    epoch = r["epoch"]
+                    break
+            fired[(fam, stage)][name].append(epoch)
+
+    print(f"\n  SUBSPACE INDICATORS: epoch at which the run had plateaued "
+          f"(< {PLATEAU_DELTA:g} mHa over {PLATEAU_WINDOW} epochs)")
+    print("  while the indicator was hot. Median over seeds; (k/n) = seeds "
+          "on which it fired.")
+    print(f"    {'family':<26} {'stage':<28} {'pt2':>12} {'tail':>12} "
+          f"{'boundary':>12} {'final |pt2|':>12}")
+    for (fam, stage) in sorted(fired):
+        cells = []
+        for name, _c, _h in INDICATORS:
+            eps = fired[(fam, stage)][name]
+            hit = [e for e in eps if e is not None]
+            cells.append(f"{int(stats.median(hit))} ({len(hit)}/{len(eps)})"
+                         if hit else f"- (0/{len(eps)})")
+        print(f"    {fam:<26} {stage:<28} {cells[0]:>12} {cells[1]:>12} "
+              f"{cells[2]:>12} {stats.mean(last[(fam, stage)]):>10.2f} mHa")
+    print("    pt2 (ENPT2) is the one to trust: it estimates the energy just "
+          "outside the subspace.")
+    print("    '-' = never fired: the plateau, if any, is not the subspace size.")
 
 
 # --------------------------------------------------------------------------
@@ -333,7 +405,10 @@ def main():
                   f"{args.exclude!r}: {', '.join(dropped)}")
 
     if args.merge:
-        fields = [k for k in rows[0] if k != "err_mha"]
+        # Union over ALL rows, first-seen order: runs from before a column
+        # existed would otherwise decide the header and silently drop it.
+        fields = list(dict.fromkeys(
+            k for r in rows for k in r if k != "err_mha"))
         with open(args.merge, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             w.writeheader()
