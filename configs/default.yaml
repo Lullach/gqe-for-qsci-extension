@@ -56,6 +56,12 @@ qsci:
   coverage: null
   # Floor, so tiny active spaces still get a usable subspace.
   min_dim: 50
+  # Log subspace-size indicators per circuit and per refined state (results.csv
+  # columns tail_weight, boundary_mha, pt2_mha). pt2_mha is the one to read: the
+  # ENPT2 energy lying just OUTSIDE the subspace. |pt2_mha| > 1.6 while the
+  # best-so-far has plateaued means the plateau is the subspace, not the policy.
+  # Costs one extra diagonalization plus an ENPT2 pass per subspace.
+  indicators: true
   enlarge_method: "symmetry_completion"
   max_cycle: 1000
   eigsh_kwargs: {"tol": 1e-14, "maxiter": 5000}

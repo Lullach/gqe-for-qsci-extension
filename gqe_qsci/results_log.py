@@ -41,6 +41,9 @@ COLUMNS = [
     "energy", "R-CASCI", "R-CCSD",
     "subspace_dim", "num_sampled_basis", "num_symmetry_preserving_basis",
     "cx_count", "total_gates", "seq",
+    # subspace-size indicators (gqe_qsci/qsci/diagnostics.py), appended last so
+    # every earlier column keeps its position
+    "tail_weight", "boundary_mha", "pt2_mha",
 ]
 
 
@@ -79,6 +82,7 @@ class ResultsWriter:
         self.context = {"exp_tag": exp_tag, "model": model,
                         "n_params": n_params, "seed": seed}
         self._ready = False
+        self._columns = COLUMNS
 
     def _open(self):
         if self._ready:
@@ -90,6 +94,16 @@ class ResultsWriter:
             with open(self.path, "w", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(COLUMNS)
             _log.info("Per-circuit results: %s", self.path)
+        else:
+            # A resumed run appends to a file that may predate newer columns.
+            # Write in THAT file's layout: appending wider rows under a narrower
+            # header silently misaligns every reader downstream.
+            with open(self.path, newline="", encoding="utf-8") as f:
+                header = next(csv.reader(f), None)
+            if header and header != COLUMNS:
+                self._columns = header
+                _log.warning("results.csv has an older header; writing its %d "
+                             "columns and dropping the rest", len(header))
         self._ready = True
 
     def log(self, *, epoch, molecule, split, entries, references=None):
@@ -106,20 +120,25 @@ class ResultsWriter:
                 for entry in entries:
                     stage = entry.get("stage") or entry.get("prefix", "")
                     for idx, s in _iter_samples(entry["result"]):
-                        writer.writerow([
-                            self.context["exp_tag"], self.context["model"],
-                            self.context["n_params"], self.context["seed"],
-                            int(epoch),
-                            molecule, split, stage, idx,
-                            getattr(s, "energy", None),
-                            refs.get("R-CASCI"), refs.get("R-CCSD"),
-                            getattr(s, "subspace_dim", None),
-                            getattr(s, "num_sampled_basis", None),
-                            getattr(s, "num_symmetry_preserving_basis", None),
-                            getattr(s, "cx_count", None),
-                            getattr(s, "total_gates", None),
-                            " ".join(str(int(t)) for t in (getattr(s, "seq", None) or ())),
-                        ])
+                        row = {
+                            **self.context,
+                            "epoch": int(epoch),
+                            "molecule": molecule, "split": split,
+                            "stage": stage, "sample_idx": idx,
+                            "R-CASCI": refs.get("R-CASCI"),
+                            "R-CCSD": refs.get("R-CCSD"),
+                            "seq": " ".join(str(int(t)) for t in
+                                            (getattr(s, "seq", None) or ())),
+                        }
+                        for name in ("energy", "subspace_dim",
+                                     "num_sampled_basis",
+                                     "num_symmetry_preserving_basis",
+                                     "cx_count", "total_gates", "tail_weight",
+                                     "boundary_mha", "pt2_mha"):
+                            # getattr: objects restored from checkpoints written
+                            # before a field existed simply lack it
+                            row[name] = getattr(s, name, None)
+                        writer.writerow([row.get(c) for c in self._columns])
         except Exception as exc:                                  # noqa: BLE001
             # Never let bookkeeping kill a training run that is otherwise fine.
             _log.warning("results.csv write failed (%s: %s); training continues.",

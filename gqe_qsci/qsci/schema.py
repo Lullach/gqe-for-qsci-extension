@@ -10,6 +10,12 @@ class QSCISampleResult:
     subspace_dim: int
     cx_count: int | None
     total_gates: int | None
+    # Subspace-size indicators (gqe_qsci/qsci/diagnostics.py); None when
+    # qsci.indicators is off. Defaulted so objects pickled before they existed
+    # still load — read them with getattr(s, name, None).
+    tail_weight: float | None = None
+    boundary_mha: float | None = None
+    pt2_mha: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

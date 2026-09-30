@@ -2559,3 +2559,52 @@ Consequences worth carrying:
     step with R_{1/4}, which is suggestive but is 10 points in one family.
     The test is a tight-target rerun of the fast families (<= 4,900 determinants,
     seconds each) followed by the same regression.
+
+## Live subspace-size indicators (2026-09-30)
+
+Question: can a run tell, while training, that its plateau is caused by the
+SUBSPACE rather than the policy? Three indicators, all in
+`gqe_qsci/qsci/diagnostics.py`, now logged per circuit and per refined state
+(`results.csv` columns `tail_weight`, `boundary_mha`, `pt2_mha`; switch:
+`qsci.indicators`, default on).
+
+  tail_weight   |c|^2 in the bottom 10% of the QSCI eigenvector (free)
+  boundary_mha  energy lost dropping that bottom 10% (one diagonalization)
+  pt2_mha       ENPT2: energy in determinants just OUTSIDE the subspace
+
+**The two "low-effort" boundary indicators are switches, not gauges — and
+unreliable on real QSCI subspaces.** Calibrated on exact top-|c| subspaces of 8
+systems (`hpc/calibrate_indicators.py`, `data/subspace/indicator_calibration.csv`)
+they collapse by orders of magnitude once the error is below ~0.2 mHa, but are
+flat above ~2 mHa: they cannot tell 10 mHa short from 280 mHa short. On the
+replayed H10 runs they read ~100x lower than top-|c| subspaces of the same error
+and sit right on their thresholds, firing on 67/94 and 37/94 circuits of
+archL15-dag-gnn although every one is hundreds of mHa from exact. Cause: a
+sampled QSCI subspace is padded at its edge with determinants the ground state
+does not need, so the edge says nothing about what is missing. (An earlier claim
+in conversation that they "never fire" was based on 4 circuits and was wrong.)
+
+**ENPT2 is the one to use.** It measures what lies outside the subspace, so it
+is a gauge: on archL15-dag-gnn-s1 it recovered 83% / 46% / 28% of a true error of
+370 / 102 / 63 mHa, and it was hot (> 1.6 mHa) on 94/94 circuits. It
+underestimates more as the subspace improves (it only sees one excitation step
+beyond it), so read it as a lower bound on what a bigger subspace would buy.
+Cost ~0.1 s per subspace at H10 size.
+
+**Applied to the L=15 architecture runs** (`hpc/replay_indicators.py`, 40 runs,
+672 best-so-far circuits, `data/indicators/`; figure from
+`hpc/plot_indicators.py`). Stop rule = best-so-far improved < 1 mHa over 25
+epochs AND indicator hot. ENPT2 fires in 40/40 runs, at a median of epoch 72-98
+depending on the family, i.e. right where the curves flatten — roughly 440
+epochs of each 540-epoch run were spent after the rule would have said "the
+subspace is the limit". Only the GQE-optimized stage could be replayed: the
+Global-refined subspace is accumulated over every circuit of every epoch. New
+runs log it live for both stages.
+
+**Replay needs a numpy simulator.** cudaq on the local CPU target takes ~55 s
+per 20-qubit circuit (sample and get_state alike); `numpy_statevector` in
+`hpc/replay_indicators.py` does it in 0.4 s and was verified at fidelity
+1.000000000000 against cudaq.get_state on all 8 pools. Two conventions it
+depends on, both measured: get_state is little-endian (qubit q = bit q), and
+cudaq.sample prints qubit 0 FIRST. Reversing the latter still passes the
+particle-number post-selection and silently gives energies ~800 mHa too high.
