@@ -83,3 +83,6 @@ hpc/*.log
 # Local scratch notes of submitted PBS job IDs. Useful, but personal
 # bookkeeping rather than part of the project.
 hpc/jobsNames etc
+
+# per-run logs written by hpc/jobs/packed.sh
+logs/

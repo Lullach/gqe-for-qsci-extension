@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -42,6 +43,21 @@ class PySCFMolecule:
     payload = {"mol_key": mol_key, "nelecas": nelecas, "norbcas": norbcas}
     payload_json = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+
+  @staticmethod
+  def _save_cache(cache_path, **arrays):
+    """
+    np.savez, atomically: write to a per-process temp file, then rename.
+
+    Several runs packed into one job (hpc/jobs/packed.sh) start at the same
+    moment and want the same cache file. A plain savez lets one of them find
+    the file existing but half written; a rename is atomic, so a reader sees
+    either no file or a complete one. Two writers both finishing is harmless:
+    they computed the same thing.
+    """
+    tmp = cache_path.with_name(f"{cache_path.stem}.{os.getpid()}.tmp.npz")
+    np.savez(tmp, **arrays)
+    os.replace(tmp, cache_path)
 
   @property
   def ccsd_amplitude(self):
@@ -109,7 +125,7 @@ class PySCFMolecule:
       self.nelec,
       ecore=self.cas_hamiltonian.e_core,
     )
-    np.savez(cache_path, energy=e_fci)
+    self._save_cache(cache_path, energy=e_fci)
     return e_fci
 
   def compute_ccsd(self):
@@ -127,7 +143,7 @@ class PySCFMolecule:
     mycc.kernel()
     e_tot = self.hf.e_tot + mycc.e_corr
     self._ccsd_amplitude = {"t1": mycc.t1, "t2": mycc.t2}
-    np.savez(
+    self._save_cache(
       cache_path,
       energy=e_tot,
       t1=mycc.t1,
