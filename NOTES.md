@@ -2394,3 +2394,55 @@ Two further results from that scan:
   * **The oracle is an UPPER bound, not a floor** — top-|c| is overlap-optimal,
     not energy-optimal. Already corrected in the section above; do not let the
     "no method can beat this" phrasing creep back.
+
+## Large-system subspace requirements (cluster, 2026-09-30)
+
+The four `rt_QC` jobs (h12, c2h2, co2, n2b) finished; 14 configurations, 196 in
+total. Data in `data/subspace/` — TRACKED, unlike `outputs/`, because these cost
+CPU-hours and back the claims here.
+
+**1. Hydrogen chains have no asymptotic advantage.** Worst-case requirement by
+chain length: h4 38.9%, h6 37.0%, h8 35.8%, h10 35.4%, **h12 36.3%** (309,784 of
+853,776). Flat at ~36% across a 24,000x range of CI dimension. The needed COUNT
+grows 10.6x, 11.9x, 12.8x, 13.8x per two atoms while the full space grows 11.1x,
+12.25x, 13.0x, 13.4x — the subspace tracks full CI almost exactly, so selected CI
+buys a constant factor of ~3 here, not a scaling advantage. **The H4/H6/H8 -> H10
+transfer experiment is built on the hardest family in the scan.** h12 at 2.4 A is
+still rising, so its peak was not found with three geometries.
+
+**2. Chemistry beats size, with dimension held EXACTLY fixed.** h10 and c2h2 both
+have 63,504 determinants and 20 qubits. Worst case: h10 35.4%, c2h2 8.4% — 4.2x.
+This upgrades the earlier 17x-spread observation, which compared families at
+equal dimension but not equal molecule count.
+
+**3. The required fraction shrinks with basis size; the count still grows.** N2
+sto-3g (3,136 dets) needs 241 at worst = 7.68%; N2 6-31G (627,264) needs 4,218 =
+0.67%. 200x the space, 11x smaller fraction, but 17.5x more determinants, i.e.
+`n_needed ~ dim^0.54`. Sublinear — which is why selected CI works at all — but a
+fixed determinant budget does not survive a basis-set improvement.
+
+**Design numbers.** Minimum L from the 2^L support ceiling at each family's worst
+geometry: c2h2, co2, n2b need **L >= 13**; h10 needs **L >= 15**; h12 needs
+**L >= 19**. For c2h2/co2/n2b the existing `coverage: 0.05` is already above the
+requirement, so those are the systems where a policy comparison measures policy
+quality rather than the truncation floor. h12 is out of reach on both axes.
+
+### Follow-ups raised by these results (not yet done)
+
+  * **The rise-then-fall shape is universal**, not an H10 quirk: c2h2 peaks at
+    2.05 A, co2 at 1.47 A, n2 at 1.87 A, h10 at 2.5 A, each falling afterwards.
+    The peak sits near where the bond breaks; past it the fragments localise and
+    a near-degenerate-but-SMALL active space suffices. Worth stating as a rule.
+  * **Is there an axis on which the requirement is simple?** The candidate
+    predictors are all computable without the FCI solve: HF-CCSD gap, largest t2
+    amplitude, natural-orbital occupation entropy, |1 - c_HF^2|, the MP2
+    correlation energy. A regression (or PCA on several) against log(n_needed)
+    would turn this descriptive scan into something predictive — i.e. "decide
+    before spending GPU hours". 196 configurations is enough data to try.
+  * **Live cap-detection safeguard.** Rather than predicting the requirement,
+    detect at run time that a policy is pinned by the subspace cap instead of by
+    its own quality. Cheap candidate indicators: `subspace_dim` saturating at the
+    cap while energy still falls; the smallest retained |c| in the QSCI
+    eigenvector staying large (a truncated tail means determinants were wanted
+    but excluded); the HF coefficient of the QSCI solution being far from the
+    HCI-at-same-size value. Would let a run flag "raise coverage" by itself.

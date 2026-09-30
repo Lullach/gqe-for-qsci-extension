@@ -1,0 +1,4 @@
+config,family,atoms,bond_length,basis,nelecas,norbcas,qubits,n_fci,n_needed,fraction,err_mha,target_mha,fci_energy,selfchecked,seconds
+h12_r1.00,h12,HHHHHHHHHHHH,1.00,sto-3g,12,12,24,853776,20910,0.02449120,1.5999,1.6,-6.4528158554,0,1404.8
+h12_r1.60,h12,HHHHHHHHHHHH,1.60,sto-3g,12,12,24,853776,215758,0.25271031,1.6000,1.6,-5.9092880252,0,2779.7
+h12_r2.40,h12,HHHHHHHHHHHH,2.40,sto-3g,12,12,24,853776,309784,0.36283990,1.6000,1.6,-5.6246220233,0,5935.7

@@ -42,10 +42,12 @@ FAMILIES="${FAMILIES:-h12}"
 FAMILIES="$(echo "$FAMILIES" | tr '+ ' ',,' | sed 's/,,*/,/g; s/^,//; s/,$//')"
 MAXFCI="${MAXFCI:-1000000}"
 TARGET="${TARGET:-1.6}"
-# One CSV per family by default. Several jobs appending to one file would
-# interleave rows mid-line; merge them afterwards instead, which the plotting
-# script does anyway (it takes a glob).
-OUT="${OUT:-subspace_$(echo "$FAMILIES" | tr ',' '_').csv}"
+# One CSV per family by default, under data/subspace/ — which is TRACKED, unlike
+# outputs/. These take CPU-hours to produce and back the claims in NOTES.md, so
+# they belong in git. Several jobs appending to one file would interleave rows
+# mid-line; merge them afterwards instead, which the plotting script does anyway
+# (it takes a glob).
+OUT="${OUT:-data/subspace/subspace_$(echo "$FAMILIES" | tr ',' '_').csv}"
 
 echo "=================================================="
 echo "job id   : ${PBS_JOBID:-<none>}"
@@ -82,5 +84,6 @@ echo
 echo "=== finished ==="
 echo "Resubmit the same command to continue; finished configurations are skipped."
 echo
-echo "Merge and plot (needs matplotlib, so do this off the cluster):"
-echo "  python3 hpc/plot_subspace_requirement.py --csv subspace_requirement.csv"
+echo "Pull the results and plot (needs matplotlib, so do this off the cluster):"
+echo "  scp \"abciq:~/gqe-for-qsci/data/subspace/subspace_*.csv\" data/subspace/"
+echo "  python3 hpc/plot_subspace_requirement.py"

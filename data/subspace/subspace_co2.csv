@@ -1,0 +1,5 @@
+config,family,atoms,bond_length,basis,nelecas,norbcas,qubits,n_fci,n_needed,fraction,err_mha,target_mha,fci_energy,selfchecked,seconds
+co2_r1.00,co2,OCO,1.00,sto-3g,16,12,24,245025,946,0.00386083,1.5991,1.6,-184.9822703144,0,228.1
+co2_r1.47,co2,OCO,1.47,sto-3g,16,12,24,245025,7315,0.02985410,1.5996,1.6,-185.1855080440,0,312.9
+co2_r1.93,co2,OCO,1.93,sto-3g,16,12,24,245025,4843,0.01976533,1.5988,1.6,-184.9081791416,0,688.7
+co2_r2.40,co2,OCO,2.40,sto-3g,16,12,24,245025,2529,0.01032140,1.5995,1.6,-184.8441269518,0,2343.0

@@ -16,7 +16,7 @@ chemical accuracy -- against the three things that might explain it:
 Needs matplotlib, so run it wherever you have it (not the ABCI-Q container).
 
     python3 hpc/plot_subspace_requirement.py
-    python3 hpc/plot_subspace_requirement.py --csv subspace_requirement.csv --out figures/
+    python3 hpc/plot_subspace_requirement.py --csv "data/subspace/*.csv" --out figures/
 """
 
 import argparse
@@ -184,7 +184,7 @@ def fig_ci_dimension(rows, plt, colors, path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="subspace_*.csv",
+    ap.add_argument("--csv", default="data/subspace/subspace_*.csv",
                     help="one CSV or a glob; the cluster writes one "
                          "file per family, so a glob is normal")
     ap.add_argument("--out", default="figures")

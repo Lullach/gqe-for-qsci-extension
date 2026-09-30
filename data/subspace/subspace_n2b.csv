@@ -1,0 +1,4 @@
+config,family,atoms,bond_length,basis,nelecas,norbcas,qubits,n_fci,n_needed,fraction,err_mha,target_mha,fci_energy,selfchecked,seconds
+n2b_r1.10,n2b,NN,1.10,6-31g,10,12,24,627264,1135,0.00180945,1.5998,1.6,-108.9999406620,0,841.2
+n2b_r1.60,n2b,NN,1.60,6-31g,10,12,24,627264,4218,0.00672444,1.5996,1.6,-108.8771143018,0,1161.2
+n2b_r2.50,n2b,NN,2.50,6-31g,10,12,24,627264,3418,0.00544906,1.5994,1.6,-108.7741585443,0,1718.6

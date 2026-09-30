@@ -138,7 +138,9 @@ def main():
                     help="skip the all-determinant self-check above this CI "
                          "size. It is a SECOND full CI solve, and the code path "
                          "is identical to the small systems where it passed.")
-    ap.add_argument("--out", default="subspace_requirement.csv")
+    ap.add_argument("--out", default="data/subspace/subspace_requirement.csv",
+                    help="results CSV; data/subspace/ is tracked in git, "
+                         "unlike outputs/")
     ap.add_argument("--redo", action="store_true",
                     help="recompute configurations already in the CSV")
     args = ap.parse_args()
@@ -156,6 +158,10 @@ def main():
               f"{'n needed':>10}{'fraction':>10}{'err(mHa)':>10}{'secs':>8}")
     print(header)
     print("-" * len(header))
+
+    out_dir = os.path.dirname(args.out)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
 
     new = not os.path.exists(args.out) or os.path.getsize(args.out) == 0
     with open(args.out, "a", newline="", encoding="utf-8") as fh:
