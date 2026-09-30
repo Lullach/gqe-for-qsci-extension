@@ -236,6 +236,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default="data/subspace/entropy.csv")
     ap.add_argument("--out", default="figures_entropy")
+    ap.add_argument("--predictor", default="H_fci",
+                    help="column for the extra presentation figure "
+                         "(default: Shannon entropy of the exact vector)")
     ap.add_argument("--top", type=int, default=16,
                     help="rows of the score table to print (0 = all)")
     ap.add_argument("--min-ci", type=int, default=1000,
@@ -281,6 +284,19 @@ def main():
             name = f"{tkey}_vs_{tag}"
             fig_scatter(kept, key, label, tkey, tlabel,
                         os.path.join(args.out, name), plt)
+    # A presentation figure with a chosen predictor, Shannon by default: it fits
+    # worse than Renyi 1/4 but it is the entropy an audience already knows.
+    labels = dict((k, lab) for k, lab in PREDICTORS)
+    labels["H_fci"] = "Shannon entropy H of |c|$^2$"
+    labels["H_cisd"] = "Shannon entropy H of |c|$^2$ (CISD)"
+    key = args.predictor
+    if key in kept[0]:
+        fig_scatter(kept, key, labels.get(key, key), "log2_n_needed",
+                    "log2 n_needed",
+                    os.path.join(args.out, f"log2_n_needed_vs_{key}"), plt)
+        print(f"presentation figure: log2_n_needed_vs_{key}")
+    else:
+        print(f"--predictor {key!r} is not a column of the CSV")
     print(f"\nfigures in {args.out}/")
 
 
