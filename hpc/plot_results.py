@@ -50,16 +50,18 @@ NUMERIC = {
     "cx_count", "total_gates", "tail_weight", "boundary_mha", "pt2_mha",
 }
 
-# Subspace-size indicators (gqe_qsci/qsci/diagnostics.py). "Hot" means the
-# indicator says the subspace is still limiting the energy. Thresholds: ENPT2 at
-# chemical accuracy; the two boundary ones from the exact-vector calibration.
-# They are LOGGED, never acted on — pt2 is the reliable one, the boundary pair
-# flickers on sampled subspaces. See NOTES.md, "Live subspace-size indicators".
-INDICATORS = [
-    ("pt2", "pt2_mha", lambda v: abs(v) > CHEMICAL_ACCURACY_MHA),
-    ("tail", "tail_weight", lambda v: v > 1e-5),
-    ("boundary", "boundary_mha", lambda v: v > 0.1),
-]
+# Subspace-size indicator (gqe_qsci/qsci/diagnostics.py). The summary reports
+# ENPT2 only: it estimates the energy just outside the subspace and is the one
+# that works on sampled subspaces. tail_weight and boundary_mha are still in
+# results.csv but flicker there, so they are not reported. The indicator is
+# "hot" when more than chemical accuracy lies outside the subspace, and it
+# "fires" at the first epoch where it is hot AND the best-so-far error has
+# plateaued. LOGGED only, never acted on. See NOTES.md, "Live subspace-size
+# indicators".
+def PT2_HOT(v):
+    return v is not None and abs(v) > CHEMICAL_ACCURACY_MHA
+
+
 PLATEAU_WINDOW = 25      # epochs
 PLATEAU_DELTA = 1.0      # mHa: less improvement than this over the window
 
@@ -194,12 +196,12 @@ def summarize(rows):
 
 def _indicator_report(rows):
     """
-    Did the subspace-size indicators fire, and when?
+    Did the subspace-size indicator (ENPT2) fire, and when?
 
     "fired" = the first epoch at which the best-so-far error had plateaued
     (improved by less than PLATEAU_DELTA mHa over PLATEAU_WINDOW epochs) WHILE
-    the indicator was hot. That is the point where a run could have been told
-    "this plateau is the subspace, not the policy". Nothing acts on it.
+    ENPT2 was hot. That is the point where a run could have been told "this
+    plateau is the subspace, not the policy". Nothing acts on it.
 
     Runs from before the indicator columns existed are skipped silently.
     """
@@ -211,42 +213,35 @@ def _indicator_report(rows):
     if not runs:
         return
 
-    fired = defaultdict(lambda: defaultdict(list))   # (fam, stage) -> name -> [epoch|None]
-    last = defaultdict(list)                         # (fam, stage) -> [final pt2]
+    fired = defaultdict(list)                 # (fam, stage) -> [epoch | None]
     for (fam, stage, _tag), rs in runs.items():
         rs.sort(key=lambda r: r["epoch"])
         err = {r["epoch"]: r["err_mha"] for r in rs}
-        last[(fam, stage)].append(abs(rs[-1]["pt2_mha"]))
-        for name, column, hot in INDICATORS:
-            epoch = None
-            for r in rs:
-                past = err.get(r["epoch"] - PLATEAU_WINDOW)
-                value = r.get(column)
-                if past is None or value is None:
-                    continue
-                if past - r["err_mha"] < PLATEAU_DELTA and hot(value):
-                    epoch = r["epoch"]
-                    break
-            fired[(fam, stage)][name].append(epoch)
+        epoch = None
+        for r in rs:
+            past = err.get(r["epoch"] - PLATEAU_WINDOW)
+            if past is None:
+                continue
+            if past - r["err_mha"] < PLATEAU_DELTA and PT2_HOT(r["pt2_mha"]):
+                epoch = r["epoch"]
+                break
+        fired[(fam, stage)].append(epoch)
 
-    print(f"\n  SUBSPACE INDICATORS: epoch at which the run had plateaued "
-          f"(< {PLATEAU_DELTA:g} mHa over {PLATEAU_WINDOW} epochs)")
-    print("  while the indicator was hot. Median over seeds; (k/n) = seeds "
-          "on which it fired.")
-    print(f"    {'family':<26} {'stage':<28} {'pt2':>12} {'tail':>12} "
-          f"{'boundary':>12} {'final |pt2|':>12}")
+    # One column, on purpose: the epoch if the indicator fired, "-" if not.
+    # With several seeds it is the median over the seeds that fired, and the
+    # count is shown only when the seeds disagree, so a clean result stays clean.
+    print("\n  SUBSPACE INDICATOR (ENPT2): epoch at which it fired, '-' if never")
+    print(f"    {'family':<26} {'stage':<28} {'fired':>10}")
     for (fam, stage) in sorted(fired):
-        cells = []
-        for name, _c, _h in INDICATORS:
-            eps = fired[(fam, stage)][name]
-            hit = [e for e in eps if e is not None]
-            cells.append(f"{int(stats.median(hit))} ({len(hit)}/{len(eps)})"
-                         if hit else f"- (0/{len(eps)})")
-        print(f"    {fam:<26} {stage:<28} {cells[0]:>12} {cells[1]:>12} "
-              f"{cells[2]:>12} {stats.mean(last[(fam, stage)]):>10.2f} mHa")
-    print("    pt2 (ENPT2) is the one to trust: it estimates the energy just "
-          "outside the subspace.")
-    print("    '-' = never fired: the plateau, if any, is not the subspace size.")
+        eps = fired[(fam, stage)]
+        hit = [e for e in eps if e is not None]
+        if not hit:
+            cell = "-"
+        elif len(hit) == len(eps):
+            cell = f"{int(stats.median(hit))}"
+        else:
+            cell = f"{int(stats.median(hit))} ({len(hit)}/{len(eps)})"
+        print(f"    {fam:<26} {stage:<28} {cell:>10}")
 
 
 # --------------------------------------------------------------------------
