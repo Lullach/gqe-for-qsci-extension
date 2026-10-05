@@ -39,6 +39,7 @@ import sys
 import numpy as np
 
 
+# CLAUDE
 def circuit_terms(sampler, seq):
     """The (theta, Pauli word) list the sampler's kernel would receive."""
     coeffs, words = [], []
@@ -48,6 +49,7 @@ def circuit_terms(sampler, seq):
     return coeffs, words
 
 
+# CLAUDE
 def numpy_statevector(n_qubits, n_electrons, coeffs, words):
     """The sampler's kernel: X on the first n_electrons qubits, then
     exp(i theta P) for each Pauli word. Little endian, as cudaq.get_state."""
@@ -84,6 +86,7 @@ def numpy_statevector(n_qubits, n_electrons, coeffs, words):
     return psi
 
 
+# CLAUDE
 def sample_counts(sampler, seq, shots, rng):
     """cudaq-compatible {bitstring: count}, qubit 0 first as cudaq.sample
     prints it."""
@@ -98,6 +101,7 @@ def sample_counts(sampler, seq, shots, rng):
             for i, c in zip(support, draws) if c > 0}
 
 
+# CLAUDE
 def verify(sampler, seq):
     """Fidelity of the numpy statevector against cudaq.get_state for one
     circuit. Slow: the cudaq half takes about a minute at 20 qubits."""

@@ -52,6 +52,7 @@ class OperatorScorer(nn.Module):
     initialization, so temperature schedules tuned for the baseline carry over.
     """
 
+    # CLAUDE
     def __init__(self, operator_features, hidden_size: int):
         super().__init__()
         feats = self._as_tensor(operator_features)
@@ -73,10 +74,12 @@ class OperatorScorer(nn.Module):
         self.register_buffer("feat_std", torch.ones(1, self.feat_dim))
         self.set_features(feats, update_stats=True)
 
+    # CLAUDE
     @staticmethod
     def _as_tensor(x) -> torch.Tensor:
         return torch.as_tensor(numpy.asarray(x), dtype=torch.float32)
 
+    # CLAUDE
     def set_features(self, operator_features, update_stats: bool = True) -> None:
         """
         Install a new operator menu.
@@ -99,6 +102,7 @@ class OperatorScorer(nn.Module):
             # clamp guards constant columns (std=0): they normalize to 0 everywhere
             self.feat_std.copy_(feats.std(dim=0, keepdim=True).clamp_min(1e-6))
 
+    # CLAUDE
     def set_normalization(self, mean, std) -> None:
         """
         Install fixed feature-normalization statistics (Phase 2 step 5).
@@ -113,10 +117,12 @@ class OperatorScorer(nn.Module):
         self.feat_mean.copy_(mean_t)
         self.feat_std.copy_(std_t)
 
+    # CLAUDE
     @property
     def vocab_size(self) -> int:
         return self.features.shape[0]
 
+    # CLAUDE
     def keys(self) -> torch.Tensor:
         """
         (V, H) encoded operator keys.
@@ -128,6 +134,7 @@ class OperatorScorer(nn.Module):
         normalized = (self.features - self.feat_mean) / self.feat_std
         return self.op_encoder(normalized)
 
+    # CLAUDE
     def forward(self, query: torch.Tensor, keys: torch.Tensor | None = None) -> torch.Tensor:
         """
         query : (B, H) or (B, L, H)
@@ -154,6 +161,7 @@ class SpecialTokenEmbedding(nn.Module):
     the molecule-specific integer-ID lookup we are removing.
     """
 
+    # CLAUDE
     def __init__(self, n_special: int, hidden_size: int):
         super().__init__()
         self.n_special = int(n_special)
@@ -162,6 +170,7 @@ class SpecialTokenEmbedding(nn.Module):
         else:
             self.register_parameter("special", None)
 
+    # CLAUDE
     def forward(self, tokens: torch.Tensor, keys: torch.Tensor) -> torch.Tensor:
         """
         tokens : (..., ) long, values in [0, V + n_special)

@@ -57,10 +57,12 @@ from gqe_qsci.qsci.baseline import (                             # noqa: E402
 
 class G:
     """Minimal stand-in for the Hydra geometry node PySCFMolecule expects."""
+    # CLAUDE
     def __init__(self, **kw):
         self.__dict__.update(kw)
 
 
+# CLAUDE
 def _r(lo, hi, n):
     step = (hi - lo) / (n - 1)
     return [round(lo + i * step, 2) for i in range(n)]
@@ -109,6 +111,7 @@ SYSTEMS = [
 ]
 
 
+# CLAUDE
 def configurations(families=None):
     out = []
     for fam, atoms, (ne, no), lengths, basis in SYSTEMS:
@@ -119,6 +122,7 @@ def configurations(families=None):
     return out
 
 
+# CLAUDE
 def already_done(path):
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return set()
@@ -126,6 +130,7 @@ def already_done(path):
         return {row["config"] for row in csv.DictReader(f) if row.get("config")}
 
 
+# CLAUDE
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", type=float, default=1.6,

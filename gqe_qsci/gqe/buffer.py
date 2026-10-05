@@ -25,6 +25,7 @@ class ReplayBuffer:
         self.size = size
         self.buf = deque(maxlen=capacity)
 
+    # CLAUDE
     def push(self, seq, energy, old_log_probs, reveal_step=None):
         """
         Store one rollout sample.
@@ -48,6 +49,7 @@ class ReplayBuffer:
         with open(path, "rb") as f:
             self.buf = pickle.load(f)
             
+    # CLAUDE
     def __getitem__(self, idx):
         item = self.buf[idx]
         seq, energy, old_log_probs, reveal_step = item
@@ -77,10 +79,12 @@ class BufferDataset(Dataset):
             "reveal_step": sample["reveal_step"],   # None for non-absorbing models
         }
     
+    # CLAUDE
     def __len__(self):
         return len(self.buffer) * self.repetition
 
 
+# CLAUDE
 def buffer_collate_fn(batch):
     """
     Custom collate function for BufferDataset.

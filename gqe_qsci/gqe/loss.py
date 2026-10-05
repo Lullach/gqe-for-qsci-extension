@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 import torch
 
 class Loss(ABC):
+    # CLAUDE
     @abstractmethod
     def __call__(self, gate_logits, context) -> torch.Tensor:
         """Compute and return a scalar loss tensor."""
@@ -34,6 +35,7 @@ class GroupRelativeLoss(Loss):
         self.clip_low = clip_low
         self.clip_high = clip_high
 
+    # CLAUDE
     @abstractmethod
     def __call__(self, gate_logits, context) -> torch.Tensor:
         pass

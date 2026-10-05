@@ -3,14 +3,17 @@ import torch.nn as nn
 
 
 class Policy(ABC, nn.Module):
+    # CLAUDE
     @abstractmethod
     def act(self, state, inv_temperature):
         pass
 
+    # CLAUDE
     @abstractmethod
     def log_prob(self, indices, inv_temperature):
         pass
 
+    # CLAUDE
     def set_molecule(self, bundle):
         """
         Re-point a feature-based policy at a different molecule (Phase 2+).

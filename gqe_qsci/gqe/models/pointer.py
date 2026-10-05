@@ -69,6 +69,7 @@ PAIR_FEATURE_NAMES = [
 ]
 
 
+# CLAUDE
 def build_orbital_inputs(pool):
     """
     (orb_feats (n, 3), pair_feats (n, n, 4)) for one molecule, as float32 numpy.
@@ -127,6 +128,7 @@ class ExcitationRules:
     All arrays are O(n) or O(2n); nothing here enumerates excitations.
     """
 
+    # CLAUDE
     def __init__(self, orbital_features, device=None, allow_singles: bool = True):
         self.allow_singles = bool(allow_singles)
         orb = torch.as_tensor(numpy.asarray(orbital_features), dtype=torch.float32)
@@ -161,6 +163,7 @@ class ExcitationRules:
     _TENSORS = ("occ", "spin", "virt", "idx", "n_virt_spin",
                 "has_virt_after", "has_occ_after", "double_ok")
 
+    # CLAUDE
     def to(self, device):
         """
         Move the precomputed mask tables to `device`, in place.
@@ -186,6 +189,7 @@ class ExcitationRules:
 
     # -- helpers ------------------------------------------------------------
 
+    # CLAUDE
     def _n_beta(self, i, j):
         """#beta among the chosen occupied orbitals (j == n means single)."""
         is_single = j.eq(self.n)
@@ -194,6 +198,7 @@ class ExcitationRules:
 
     # -- the masks ----------------------------------------------------------
 
+    # CLAUDE
     def step_mask(self, s: int, picks: list, batch: int) -> torch.Tensor:
         """(batch, n + 1) bool — True where the candidate is ALLOWED at step s."""
         n = self.n
@@ -264,6 +269,7 @@ class ExcitationRules:
 class _Block(nn.Module):
     """Pre-norm transformer block with an additive pairwise attention bias."""
 
+    # CLAUDE
     def __init__(self, hidden_size: int, num_heads: int, dropout: float):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size)
@@ -277,6 +283,7 @@ class _Block(nn.Module):
             nn.Linear(4 * hidden_size, hidden_size),
         )
 
+    # CLAUDE
     def forward(self, x, bias):
         h = self.norm1(x)
         attended, _ = self.attn(h, h, h, attn_mask=bias, need_weights=False)
@@ -301,6 +308,7 @@ class OrbitalEncoder(nn.Module):
     molecules and transfer would be undermined.
     """
 
+    # CLAUDE
     def __init__(self, orb_dim, pair_dim, hidden_size, num_layers=3,
                  num_heads=4, dropout=0.0):
         super().__init__()
@@ -319,6 +327,7 @@ class OrbitalEncoder(nn.Module):
         self.register_buffer("pair_mean", torch.zeros(1, 1, pair_dim))
         self.register_buffer("pair_std", torch.ones(1, 1, pair_dim))
 
+    # CLAUDE
     def set_normalization(self, orb_feats, pair_feats):
         """Fit the frozen statistics; call once, over the training molecules."""
         orb = torch.as_tensor(numpy.asarray(orb_feats), dtype=torch.float32)
@@ -329,6 +338,7 @@ class OrbitalEncoder(nn.Module):
         self.pair_mean.copy_(flat.mean(0).view(1, 1, -1))
         self.pair_std.copy_(flat.std(0).clamp_min(1e-6).view(1, 1, -1))
 
+    # CLAUDE
     def forward(self, orb_feats, pair_feats):
         """orb_feats (n, orb_dim), pair_feats (n, n, pair_dim) -> (n, H)."""
         x = self.proj((orb_feats - self.orb_mean) / self.orb_std).unsqueeze(0)
@@ -361,6 +371,7 @@ class ExcitationPointer(nn.Module):
 
     N_STEPS = 4
 
+    # CLAUDE
     def __init__(self, hidden_size: int, pair_dim: int):
         super().__init__()
         self.hidden_size = int(hidden_size)
@@ -374,6 +385,7 @@ class ExcitationPointer(nn.Module):
         )
         self.scale = hidden_size ** -0.5
 
+    # CLAUDE
     @staticmethod
     def _pair_context(pair_feats, picks, n):
         """
@@ -392,6 +404,7 @@ class ExcitationPointer(nn.Module):
         pad = torch.zeros(B, 1, dp, device=pair_feats.device, dtype=pair_feats.dtype)
         return torch.cat([acc, pad], dim=1)
 
+    # CLAUDE
     def forward(self, query, orb_keys, pair_feats, rules, inv_temperature,
                 forced=None, return_entropy=False):
         """
@@ -454,6 +467,7 @@ class ExcitationPointer(nn.Module):
 # Small conversions
 # ---------------------------------------------------------------------------
 
+# CLAUDE
 def gate_embedding(picks: torch.Tensor, orb_keys: torch.Tensor) -> torch.Tensor:
     """
     (B, H) DAG node embedding for a decoded gate: the mean of the orbital keys it
@@ -474,6 +488,7 @@ def gate_embedding(picks: torch.Tensor, orb_keys: torch.Tensor) -> torch.Tensor:
     return (emb * real).sum(dim=1) / real.sum(dim=1).clamp_min(1.0)
 
 
+# CLAUDE
 def excitation_qubits(row, n: int) -> list[int]:
     """
     Spin-orbitals touched by one decoded gate — its qubit footprint, which is
@@ -488,6 +503,7 @@ def excitation_qubits(row, n: int) -> list[int]:
     return sorted(qubits)
 
 
+# CLAUDE
 def excitation_pairs(row, n: int) -> list[tuple[int, int]]:
     """
     (occupied, virtual) index pairs in the form make_excitation_gate() expects,
@@ -537,6 +553,7 @@ class PointerActionSpace(nn.Module):
     mis-decode a stale one.
     """
 
+    # CLAUDE
     def __init__(
         self,
         pool,
@@ -565,12 +582,14 @@ class PointerActionSpace(nn.Module):
 
     # -- molecule binding ---------------------------------------------------
 
+    # CLAUDE
     def _attach(self, pool, orb):
         self.pool = pool
         self.n_orbitals = int(orb.shape[0])
         self.rules = ExcitationRules(orb, device=self.orb_feats.device,
                                      allow_singles=self.allow_singles)
 
+    # CLAUDE
     def set_molecule(self, bundle):
         """
         Re-point at another molecule. There is no menu, no footprint table and
@@ -586,6 +605,7 @@ class PointerActionSpace(nn.Module):
 
     # -- the three calls a host policy makes --------------------------------
 
+    # CLAUDE
     def keys(self):
         """(n, H) encoded orbitals. Compute ONCE per forward and pass around."""
         # The mask tables are not nn.Module state, so policy.to(device) does not
@@ -594,6 +614,7 @@ class PointerActionSpace(nn.Module):
         self.rules.to(self.orb_feats.device)
         return self.encoder(self.orb_feats, self.pair_feats)
 
+    # CLAUDE
     def decode(self, query, orb_keys, inv_temperature, forced=None,
                return_entropy=False):
         """
@@ -612,16 +633,19 @@ class PointerActionSpace(nn.Module):
             return picks, step_logp.sum(dim=-1), out[2].sum(dim=-1)
         return picks, step_logp.sum(dim=-1)
 
+    # CLAUDE
     def embed(self, picks, orb_keys):
         """(N, H) embedding of a decoded gate — what replaces a token lookup."""
         return gate_embedding(picks, orb_keys)
 
+    # CLAUDE
     def footprint(self, row):
         """Spin-orbitals one decoded gate touches (its qubit footprint)."""
         return excitation_qubits(row, self.n_orbitals)
 
     # -- index plumbing, for the parts of the stack that are index-keyed ------
 
+    # CLAUDE
     def to_indices(self, picks):
         """
         (..., 4) pointer tuples -> (...) long pool indices, materialising any
@@ -639,6 +663,7 @@ class PointerActionSpace(nn.Module):
             idx, dtype=torch.long, device=picks.device
         ).view(picks.shape[:-1])
 
+    # CLAUDE
     def to_picks(self, indices):
         """(...) pool indices -> (..., 4) pointer tuples, via the pool's map."""
         keys = getattr(self.pool, "excitation_keys", None)

@@ -44,6 +44,7 @@ class PySCFMolecule:
     payload_json = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
+  # CLAUDE
   @staticmethod
   def _save_cache(cache_path, **arrays):
     """
@@ -65,16 +66,19 @@ class PySCFMolecule:
       _ = self.compute_ccsd()
     return self._ccsd_amplitude
 
+  # CLAUDE
   @property
   def active_mo_energy(self):
     """Hartree-Fock orbital energies of the active-space orbitals, shape (norb,)."""
     return np.asarray(self.hf.mo_energy)[self.active_indices]
 
+  # CLAUDE
   @property
   def active_mo_occ(self):
     """Hartree-Fock occupations (2.0 / 0.0) of the active-space orbitals, shape (norb,)."""
     return np.asarray(self.hf.mo_occ)[self.active_indices]
 
+  # CLAUDE
   @property
   def n_determinants(self) -> int:
     """

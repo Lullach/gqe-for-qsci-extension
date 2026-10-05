@@ -15,6 +15,7 @@ except ImportError:
     GATConv = None
 
 
+# CLAUDE
 def _require_pyg():
     if not _TORCH_GEOMETRIC_AVAILABLE:
         raise ImportError(
@@ -23,6 +24,7 @@ def _require_pyg():
         )
 
 
+# CLAUDE
 def _pack_footprints(footprints: list[list[int]], n_qubits: int) -> torch.Tensor:
     """
     Convert a list of qubit-index lists to a (V, n_qubits) bool tensor.
@@ -98,6 +100,7 @@ class CircuitDAGGNNPolicy(Policy):
     Use config  model=dag_gnn  to select this variant.
     """
 
+    # CLAUDE
     def __init__(
         self,
         vocab_size: int,
@@ -206,6 +209,7 @@ class CircuitDAGGNNPolicy(Policy):
     # Cross-molecule swap
     # -------------------------------------------------------------------------
 
+    # CLAUDE
     def set_molecule(self, bundle):
         """
         Atomically re-point the policy at bundle's molecule. Swaps ALL
@@ -245,6 +249,7 @@ class CircuitDAGGNNPolicy(Policy):
     # Internal helpers
     # -------------------------------------------------------------------------
 
+    # CLAUDE
     def _node_table(self) -> torch.Tensor:
         """
         (n_qubits + V + 1, H) embedding table for node tokens.
@@ -268,6 +273,7 @@ class CircuitDAGGNNPolicy(Policy):
             dim=0,
         )
 
+    # CLAUDE
     def _assemble_node_embeddings(
         self,
         gate_embs: list[torch.Tensor],   # per placed gate, each (B, H)
@@ -306,6 +312,7 @@ class CircuitDAGGNNPolicy(Policy):
             )
         return torch.cat(parts, dim=1)
 
+    # CLAUDE
     def _step_forward(
         self,
         node_tokens: torch.Tensor,   # (B, num_nodes) long — None if node_embs given
@@ -374,6 +381,7 @@ class CircuitDAGGNNPolicy(Policy):
         frontier_h = h_3d.gather(1, idx)                           # (B, n_qubits, H)
         return frontier_h.mean(dim=1)                              # (B, H)
 
+    # CLAUDE
     def _advance_dag(
         self,
         ops: torch.Tensor,           # (B,) long — operator index placed at this step
@@ -402,6 +410,7 @@ class CircuitDAGGNNPolicy(Policy):
 
     # --- canonical-form (trace lexicographic normal form) masking -----------
 
+    # CLAUDE
     def _canonical_mask(self, prefix: torch.Tensor) -> torch.Tensor:
         """
         (B, V) bool — True where operator k is FORBIDDEN at this step.
@@ -440,6 +449,7 @@ class CircuitDAGGNNPolicy(Policy):
         smaller = ks.view(1, -1, 1) < prefix.unsqueeze(1)                 # (B, V, t)
         return (reach & smaller).any(dim=-1)                              # (B, V)
 
+    # CLAUDE
     def _scaled_logits(self, pooled, inv_temperature, prefix):
         """
         Operator logits, inv_temperature-scaled, with the canonical mask applied.
@@ -455,6 +465,7 @@ class CircuitDAGGNNPolicy(Policy):
             scaled = scaled.masked_fill(self._canonical_mask(prefix), float("-inf"))
         return scaled
 
+    # CLAUDE
     def _init_dag_state(self, B: int, device: torch.device):
         """Allocate and initialise the DAG book-keeping tensors."""
         num_nodes = self.n_qubits + self.ngates
@@ -478,12 +489,14 @@ class CircuitDAGGNNPolicy(Policy):
     # Policy interface
     # -------------------------------------------------------------------------
 
+    # CLAUDE
     def act(self, state, inv_temperature):
         raise RuntimeError(
             "CircuitDAGGNNPolicy generates whole sequences via "
             "sample_sequence(); act() is not supported."
         )
 
+    # CLAUDE
     def sample_sequence(self, state, inv_temperature):
         """
         Generate a full gate sequence by building the circuit DAG incrementally.
@@ -523,6 +536,7 @@ class CircuitDAGGNNPolicy(Policy):
         state["idx"] = torch.cat((state["idx"], ops_tensor), dim=1)
         return state
 
+    # CLAUDE
     def log_prob(self, indices, inv_temperature, return_entropy=False, reveal_step=None):
         """
         Exact log p_θ(a_1, …, a_L) = Σ_t log p_θ(a_t | DAG_{t-1}).

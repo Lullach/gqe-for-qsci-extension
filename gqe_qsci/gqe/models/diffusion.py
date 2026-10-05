@@ -13,6 +13,7 @@ from gqe_qsci.gqe.models.policy import Policy
 # Noise schedule helper
 # ---------------------------------------------------------------------------
 
+# CLAUDE
 def _make_alpha_schedule(diffusion_steps: int, schedule: str) -> torch.Tensor:
     """
     Return α_t for t = 0 … T  (length T+1).
@@ -70,6 +71,7 @@ class _CircuitDiffusionBase(Policy):
         The operator menu; required when feature_scorer=True.
     """
 
+    # CLAUDE
     def __init__(
         self,
         vocab_size: int,
@@ -122,6 +124,7 @@ class _CircuitDiffusionBase(Policy):
         else:
             self.output = nn.Linear(hidden_size, self.vocab_size)
 
+    # CLAUDE
     def _logits(self, tokens, timestep):
         """
         tokens   : (B, L)  gate indices; may include special tokens in subclasses
@@ -157,12 +160,14 @@ class _CircuitDiffusionBase(Policy):
             return self.output(h, keys=keys)                   # (B, L, V)
         return self.output(h)
 
+    # CLAUDE
     def act(self, state, inv_temperature):
         raise RuntimeError(
             f"{self.__class__.__name__} generates whole sequences via "
             "sample_sequence(); act() is not supported."
         )
 
+    # CLAUDE
     def set_molecule(self, bundle):
         """
         Re-point at bundle's molecule. Swaps the operator menu (which is also the
@@ -178,6 +183,7 @@ class _CircuitDiffusionBase(Policy):
         self.output.set_features(bundle.operator_features, update_stats=False)
         self._refresh_mask_token()
 
+    # CLAUDE
     def _refresh_mask_token(self):
         """Hook: subclasses with a [MASK] token (index == vocab_size) reset it."""
         pass
@@ -199,6 +205,7 @@ class CircuitDiffusionModelSimple(_CircuitDiffusionBase):
     Use config  model=diffusion  to select this variant.
     """
 
+    # CLAUDE
     def __init__(
         self,
         vocab_size,
@@ -218,6 +225,7 @@ class CircuitDiffusionModelSimple(_CircuitDiffusionBase):
             operator_features=operator_features,
         )
 
+    # CLAUDE
     def sample_sequence(self, state, inv_temperature):
         batch_size = state["idx"].shape[0]
         device     = state["idx"].device
@@ -234,6 +242,7 @@ class CircuitDiffusionModelSimple(_CircuitDiffusionBase):
         state["idx"] = torch.cat((state["idx"], tokens), dim=1)
         return state
 
+    # CLAUDE
     def log_prob(self, indices, inv_temperature, return_entropy=False):
         gate_tokens  = indices[:, 1:]
         batch_size   = gate_tokens.shape[0]
@@ -298,6 +307,7 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
     Use config  model=diffusion_absorbing  to select this variant.
     """
 
+    # CLAUDE
     def __init__(
         self,
         vocab_size,
@@ -326,12 +336,14 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
         # register_buffer: persistent (saved in checkpoints), moves with .to(device)
         self.register_buffer("alpha", alpha)   # shape [T+1]
 
+    # CLAUDE
     def _refresh_mask_token(self):
         # [MASK] lives just past the (possibly changed) real vocabulary.
         self.mask_token = self.vocab_size
 
     # --- reverse process / sampling ----------------------------------------
 
+    # CLAUDE
     def sample_sequence(self, state, inv_temperature):
         """
         Generate a full gate sequence via the absorbing reverse process.
@@ -412,6 +424,7 @@ class CircuitDiffusionModelAbsorbing(_CircuitDiffusionBase):
 
     # --- log-probability ---------------------------------------------------
 
+    # CLAUDE
     def log_prob(self, indices, inv_temperature, return_entropy=False, reveal_step=None):
         """
         Exact log-probability of the sampled reverse TRAJECTORY (DDPO-style).
@@ -528,6 +541,7 @@ class CircuitDiffusionModelSingleShot(_CircuitDiffusionBase):
     Use config  model=diffusion_singleshot  to select this variant.
     """
 
+    # CLAUDE
     def __init__(
         self,
         vocab_size,
@@ -558,11 +572,13 @@ class CircuitDiffusionModelSingleShot(_CircuitDiffusionBase):
         )
         self.mask_token = self.vocab_size
 
+    # CLAUDE
     def _refresh_mask_token(self):
         self.mask_token = self.vocab_size
 
     # --- reverse process / sampling ----------------------------------------
 
+    # CLAUDE
     def sample_sequence(self, state, inv_temperature):
         """
         Generate a gate sequence in a single forward pass.
@@ -589,6 +605,7 @@ class CircuitDiffusionModelSingleShot(_CircuitDiffusionBase):
 
     # --- log-probability ---------------------------------------------------
 
+    # CLAUDE
     def log_prob(self, indices, inv_temperature, return_entropy=False, reveal_step=None):
         """
         Exact log p_θ(x_0 | x_T) — no ELBO approximation.

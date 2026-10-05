@@ -30,6 +30,7 @@ from gqe_qsci.wandb_logger import Logger
 
 
 class TrainPipeline(pl.LightningModule):
+    # CLAUDE
     def __init__(self, factory, config):
         super().__init__()
         self.config = config
@@ -56,6 +57,7 @@ class TrainPipeline(pl.LightningModule):
     # Setup
     # ------------------------------------------------------------------ #
 
+    # CLAUDE
     def _init_single_molecule(self):
         self.qsci_pipeline = self.factory.create_qsci_pipeline(self.config)
         self.model = self.factory.create_model(self.config)
@@ -63,6 +65,7 @@ class TrainPipeline(pl.LightningModule):
         self.current_bundle = None
         self.results_writer = self._make_results_writer()
 
+    # CLAUDE
     def _init_multi_molecule(self):
         """
         Build one bundle per molecule, create the model ONCE from the first
@@ -127,18 +130,21 @@ class TrainPipeline(pl.LightningModule):
             len(self.train_bundles), len(self.eval_bundles), n_normed,
         )
 
+    # CLAUDE
     def _operator_scorer(self):
         """The model's single OperatorScorer (one instance even when wte/lm_head
         share it), or None for an integer-ID model."""
         scorers = [m for m in self.model.modules() if isinstance(m, OperatorScorer)]
         return scorers[0] if scorers else None
 
+    # CLAUDE
     def _orbital_encoder(self):
         """The model's OrbitalEncoder, or None if it is not a pointer policy."""
         from gqe_qsci.gqe.models.pointer import OrbitalEncoder
         encs = [m for m in self.model.modules() if isinstance(m, OrbitalEncoder)]
         return encs[0] if encs else None
 
+    # CLAUDE
     def _reference_energies(self, bundle):
         """Per-molecule reference energies, computed once and cached (disk-cached
         by molecule.py, so cheap on re-runs)."""
@@ -159,6 +165,7 @@ class TrainPipeline(pl.LightningModule):
         self._refs[bundle.name] = refs
         return refs
 
+    # CLAUDE
     def _activate_bundle(self, bundle):
         """Atomically point the whole pipeline at one molecule: swap the model's
         buffers, the QSCI pipeline, and the logger's reference energies."""
@@ -169,15 +176,18 @@ class TrainPipeline(pl.LightningModule):
         self.metric_logger.reference_energies = self._reference_energies(bundle)
         self.current_bundle = bundle
 
+    # CLAUDE
     def _next_train_bundle(self):
         b = self.train_bundles[self._rr % len(self.train_bundles)]
         self._rr += 1
         return b
 
+    # CLAUDE
     @property
     def _tracker_key(self) -> str:
         return self.current_bundle.name if self.multi_molecule else "_single_"
 
+    # CLAUDE
     def _make_results_writer(self) -> ResultsWriter:
         """Per-circuit CSV beside the run. See results_log.py for why."""
         target = getattr(self.config.model, "_target_", "") or ""
@@ -189,11 +199,13 @@ class TrainPipeline(pl.LightningModule):
             n_params=sum(p.numel() for p in self.model.parameters()),
         )
 
+    # CLAUDE
     @property
     def _metric_prefix(self) -> str:
         """Namespace metrics by molecule so per-molecule curves stay separate."""
         return f"{self.current_bundle.name}/" if self.multi_molecule else ""
 
+    # CLAUDE
     def on_fit_start(self):
         run = self.logger.experiment
         run.define_metric("epoch")
@@ -205,6 +217,7 @@ class TrainPipeline(pl.LightningModule):
             self.collect_rollout(log=False)
         super().on_fit_start()
 
+    # CLAUDE
     def _apply_warm_start(self):
         """
         Optionally load model weights from a previous checkpoint before training
@@ -258,6 +271,7 @@ class TrainPipeline(pl.LightningModule):
             )
         _log.info("Warm-start complete.")
 
+    # CLAUDE
     def on_train_epoch_start(self):
         if self.multi_molecule:
             self._activate_bundle(self._next_train_bundle())
@@ -283,6 +297,7 @@ class TrainPipeline(pl.LightningModule):
         )
         super().on_train_epoch_start()
     
+    # CLAUDE
     def on_train_epoch_end(self):
         if self.multi_molecule:
             eval_every = int(self.config.trainer.get("eval_every", 10))
@@ -298,6 +313,7 @@ class TrainPipeline(pl.LightningModule):
     # Zero-shot evaluation on held-out molecules (Phase 2 step 6)
     # ------------------------------------------------------------------ #
 
+    # CLAUDE
     @torch.no_grad()
     def _zeroshot_eval(self):
         """
@@ -346,6 +362,7 @@ class TrainPipeline(pl.LightningModule):
         if was_training:
             self.model.train()
 
+    # CLAUDE
     def _log_dissociation_curve(self):
         """
         Summary charts vs scan coordinate (bond length), one point per molecule
@@ -417,6 +434,7 @@ class TrainPipeline(pl.LightningModule):
 
         self.logger.experiment.log(payload)
 
+    # CLAUDE
     def collect_rollout(self, log=False):
         state = {
             "idx": torch.zeros(
@@ -468,6 +486,7 @@ class TrainPipeline(pl.LightningModule):
         self.scheduler.update(energies=energies)
         return qsci_result
 
+    # CLAUDE
     def _update_bests(self, qsci_result, energies):
         """Update the best-so-far trackers for the CURRENT molecule (keyed so
         molecules never compare energies against each other)."""
@@ -482,6 +501,7 @@ class TrainPipeline(pl.LightningModule):
             best["global"] = qsci_result.global_refined
 
 
+    # CLAUDE
     def training_step(self, batch, _):
         for k, v in batch.items():
             if torch.is_tensor(v):
@@ -558,6 +578,7 @@ class TrainPipeline(pl.LightningModule):
         )
         return {"optimizer": optimizer}
 
+    # CLAUDE
     def on_save_checkpoint(self, checkpoint):
         extra = {
             "inverse_temperature": self.scheduler.get_inverse_temperature(),
@@ -581,6 +602,7 @@ class TrainPipeline(pl.LightningModule):
         checkpoint["extra_info"] = extra
         self.buffer.save(f"{self.config.output}/buffer.pkl")
 
+    # CLAUDE
     def on_load_checkpoint(self, checkpoint):
         extra_info = checkpoint.get("extra_info", {})
         if "inverse_temperature" in extra_info:

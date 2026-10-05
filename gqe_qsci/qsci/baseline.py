@@ -26,6 +26,7 @@ import pyci
 from gqe_qsci.qsci.determinant import Determinant
 
 
+# CLAUDE
 def _ndet(wfn) -> int:
     """Number of determinants in a pyci wavefunction (API varies by version)."""
     try:
@@ -34,6 +35,7 @@ def _ndet(wfn) -> int:
         return int(wfn.ndet)
 
 
+# CLAUDE
 def build_pyci_hamiltonian(molecule):
     """pyci.hamiltonian for a molecule's active space — same recipe as
     QSCIPipeline.__init__ (h2 transposed to physicist ordering)."""
@@ -42,17 +44,20 @@ def build_pyci_hamiltonian(molecule):
     return pyci.hamiltonian(ham.e_core, ham.h1, h2)
 
 
+# CLAUDE
 def fci_dimension(norb, nelec):
     na, nb = nelec
     return math.comb(norb, na) * math.comb(norb, nb)
 
 
+# CLAUDE
 def hf_determinant(nelec):
     """Hartree-Fock reference: the lowest na (nb) orbitals occupied."""
     na, nb = nelec
     return Determinant([np.uint64((1 << na) - 1), np.uint64((1 << nb) - 1)])
 
 
+# CLAUDE
 def diagonalize(pyci_ham, determinants, nelec, max_cycle=1000):
     """Ground-state energy of the Hamiltonian projected onto `determinants`.
     Same path as QSCIPipeline.diagonalize (fullci_wfn + sparse_op.solve)."""
@@ -68,6 +73,7 @@ def diagonalize(pyci_ham, determinants, nelec, max_cycle=1000):
 # Random selection (the floor)
 # ---------------------------------------------------------------------------
 
+# CLAUDE
 def random_determinants(norb, nelec, n_det, rng):
     """
     n_det distinct number/spin-conserving determinants, HF always included.
@@ -94,6 +100,7 @@ def random_determinants(norb, nelec, n_det, rng):
     return [Determinant([np.uint64(a), np.uint64(b)]) for a, b in seen]
 
 
+# CLAUDE
 def random_curve(pyci_ham, norb, nelec, dims, rng, n_seeds=3, max_cycle=1000):
     """
     (ndet, mean_energy, std_energy) for random selection at each size in `dims`,
@@ -113,6 +120,7 @@ def random_curve(pyci_ham, norb, nelec, dims, rng, n_seeds=3, max_cycle=1000):
 # Heat-bath CI (the fair classical competitor)
 # ---------------------------------------------------------------------------
 
+# CLAUDE
 def hci_curve(pyci_ham, nelec, max_det, eps_start=1e-2, eps_min=1e-8, max_cycle=1000):
     """
     Classical heat-bath CI convergence: (ndet, energy) recorded after each HCI
@@ -145,6 +153,7 @@ def hci_curve(pyci_ham, nelec, max_det, eps_start=1e-2, eps_min=1e-8, max_cycle=
 # Oracle selection (the bound: what NO method can beat at a given size)
 # ---------------------------------------------------------------------------
 
+# CLAUDE
 def _determinants_of(wfn):
     """
     Every determinant in `wfn`, as Determinant objects, in the wavefunction's
@@ -176,6 +185,7 @@ def _determinants_of(wfn):
     return dets
 
 
+# CLAUDE
 def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
     """
     (ndet, energy) for the BEST subspace of each size: take the exact FCI vector,
@@ -234,6 +244,7 @@ def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
     return curve, fci_energy
 
 
+# CLAUDE
 def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000, selfcheck=True):
     """(determinants sorted by |c| descending, fci_energy). Shared setup."""
     wfn = pyci.fullci_wfn(pyci_ham.nbasis, *nelec)
@@ -258,6 +269,7 @@ def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000, selfcheck=True):
     return [dets[i] for i in order], fci_energy
 
 
+# CLAUDE
 def bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha=1.6,
                    max_cycle=1000, progress=None):
     """
@@ -298,6 +310,7 @@ def bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha=1.6,
     return best
 
 
+# CLAUDE
 def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
                      progress=None, selfcheck=True):
     """

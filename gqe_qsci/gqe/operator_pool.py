@@ -59,6 +59,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
     def get_gate_count(self, seq: list[int]) -> Counter:
         raise NotImplementedError("Subclasses must implement this method")
 
+    # CLAUDE
     def get_qubit_footprints(self) -> list[list[int]]:
         """
         Return the qubit footprint of each operator in the pool.
@@ -110,6 +111,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
         "is_beta",   # 0.0 = alpha (even qubit), 1.0 = beta (odd qubit)
     ]
 
+    # CLAUDE
     def get_orbital_features(self) -> numpy.ndarray:
         """
         (n_qubits, 3) float32 — physical features for each qubit wire.
@@ -138,6 +140,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
             ]
         return out
 
+    # CLAUDE
     def get_xy_qubit_footprints(self) -> list[list[int]]:
         """
         Like get_qubit_footprints(), but only counting qubits carrying an X or Y
@@ -156,6 +159,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
             footprints.append(sorted(qubits))
         return footprints
 
+    # CLAUDE
     def get_pauli_words(self) -> list[str]:
         """
         First Pauli term's word (length n_qubits) for each pool operator.
@@ -177,6 +181,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
             words.append(word if word is not None else "I" * self.n_qubits)
         return words
 
+    # CLAUDE
     def get_commutation_matrix(self) -> numpy.ndarray:
         """
         (V, V) bool matrix: commutes[i, j] is True iff pool operators i and j
@@ -221,6 +226,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
     # returns its index thereafter. The pool stops being a CCSD-screened menu and
     # becomes a cache of what the policy has actually built.
 
+    # CLAUDE
     def _tq_molecule(self):
         """Cached tequila molecule; building it is the expensive part."""
         cached = getattr(self, "_tq_mol_cache", None)
@@ -236,6 +242,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
             self._tq_mol_cache = cached
         return cached
 
+    # CLAUDE
     def mp2_angle(self, occ_sos, virt_sos, single_angle: float = 0.1) -> float:
         """
         Rotation angle for one excitation, without CCSD.
@@ -264,6 +271,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
                                      signed=True)
         return float(2.0 * coupling / denom)
 
+    # CLAUDE
     def make_excitation_operator(self, pairs, angle: float):
         """
         One cudaq operator for the excitation given as (virtual, occupied) index
@@ -316,6 +324,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
         # them as separate exp_pauli calls reproduces exp(angle * generator).
         return angle * cudaq.SpinOperator(operator)
 
+    # CLAUDE
     def ensure_excitation(self, key, pairs, angle: float | None = None,
                           single_angle: float = 0.1) -> int:
         """
@@ -350,6 +359,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
         self.excitation_keys[index] = key
         return index
 
+    # CLAUDE
     @staticmethod
     def _hf_coupling(occ_sos: list[int], virt_sos: list[int], h2,
                      signed: bool = False) -> float:
@@ -386,6 +396,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
             return 0.0  # spin-flip-like term: does not couple to the reference
         return keep(h2[o1, v1, o2, v2] - h2[o1, v2, o2, v1])
 
+    # CLAUDE
     def get_operator_features(self) -> numpy.ndarray:
         """
         Return a (V, len(FEATURE_NAMES)) float32 matrix describing every pool
@@ -444,6 +455,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
             ]
         return feats
 
+    # CLAUDE
     @staticmethod
     def _excitation_key(idx: tuple) -> tuple:
         """
@@ -461,6 +473,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
             (idx[2 * i], idx[2 * i + 1]) for i in range(len(idx) // 2)
         ))
 
+    # CLAUDE
     def generate_excitations(self, threshold: float, dedup_excitations: bool = False):
         """
         Map each screened CCSD amplitude to spin-orbital excitation indices.
@@ -519,6 +532,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
                         add(idx_bbbb, anglex)
         return indices
 
+    # CLAUDE
     def make_uccsd_ansatz(self, threshold: float, dedup_excitations: bool = False):
         screened_indices = self.generate_excitations(
             threshold=threshold, dedup_excitations=dedup_excitations
@@ -536,6 +550,7 @@ class UCCSDBasedPool(OperatorPool, ABC):
 
 
 class PauliEvolutionPool(UCCSDBasedPool):
+    # CLAUDE
     def __init__(
         self,
         molecule: PySCFMolecule,
@@ -557,6 +572,7 @@ class PauliEvolutionPool(UCCSDBasedPool):
     def get_vocab_size(self):
         return len(self.pool)
 
+    # CLAUDE
     def build_operator_pool(self, threshold, remove_z_ladder=False, only_use_first_pauli=False, dedup_excitations=False, ccsd_screening=True):
         # Remembered so make_excitation_operator() can reproduce the same
         # treatment for gates the pointer policy builds later (a pointer gate
@@ -630,6 +646,7 @@ class ExcitationPool(UCCSDBasedPool):
     commutation matrix are therefore approximate for this pool.
     """
 
+    # CLAUDE
     def __init__(
         self,
         molecule: PySCFMolecule,
@@ -650,6 +667,7 @@ class ExcitationPool(UCCSDBasedPool):
     def get_vocab_size(self):
         return len(self.pool)
 
+    # CLAUDE
     def build_operator_pool(self, threshold, dedup_excitations=False, ccsd_screening=True):
         # This pool is full-generator by definition, so make_excitation_operator()
         # builds full generators too. Set before any early return.

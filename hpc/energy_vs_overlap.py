@@ -64,6 +64,7 @@ COLUMNS = ["config", "family", "bond_length", "basis", "nelecas", "norbcas",
            "frac_energy", "err_overlap", "err_energy", "fci_energy", "seconds"]
 
 
+# CLAUDE
 def already_done(path):
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return set()
@@ -71,6 +72,7 @@ def already_done(path):
         return {r["config"] for r in csv.DictReader(f) if r.get("config")}
 
 
+# CLAUDE
 def compare(ham, nelec, target_mha, max_cycle=1000):
     """(n_overlap, err_o, n_energy, err_e, fci_energy, n_fci) for one system."""
     wfn = pyci.fullci_wfn(ham.nbasis, *nelec)
@@ -102,6 +104,7 @@ def compare(ham, nelec, target_mha, max_cycle=1000):
     return n_o, e_o, n_e, e_e, fci_energy, len(dets)
 
 
+# CLAUDE
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", type=float, default=1.6)

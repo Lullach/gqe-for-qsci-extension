@@ -42,6 +42,7 @@ class QSCIPipeline:
         )
 
 
+    # CLAUDE
     def diagonalize(self, subspace: DeterminantSubspace) -> tuple[float, SCIVector]:
         wfn = pyci.fullci_wfn(self._pyci_ham.nbasis, *self.nelec)
         for det in subspace.determinants:

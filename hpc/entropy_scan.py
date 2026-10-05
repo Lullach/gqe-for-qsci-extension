@@ -94,6 +94,7 @@ LOG2E = 1.0 / math.log(2.0)
 # entropies
 # ---------------------------------------------------------------------------
 
+# CLAUDE
 def _binary_entropy_bits(p):
     """h(p) in bits, elementwise, with h(0) = h(1) = 0."""
     p = np.clip(np.asarray(p, dtype=float), 0.0, 1.0)
@@ -105,6 +106,7 @@ def _binary_entropy_bits(p):
     return out
 
 
+# CLAUDE
 def marginal_occupations(wfn, weights, nbasis):
     """
     Per-spin-orbital occupation probability <n_i> = sum over determinants that
@@ -137,6 +139,7 @@ def marginal_occupations(wfn, weights, nbasis):
 RENYI_ORDERS = (0.1, 0.15, 0.25, 0.5, 0.75, 2.0)
 
 
+# CLAUDE
 def _renyi_bits(w, alpha):
     """R_alpha = log2(sum p^alpha) / (1 - alpha), in bits."""
     nz = w[w > 0.0]
@@ -145,6 +148,7 @@ def _renyi_bits(w, alpha):
     return float(np.log2((nz ** alpha).sum()) / (1.0 - alpha))
 
 
+# CLAUDE
 def _spectral(w, prefix=""):
     """Every entropy of one normalised weight vector, in bits."""
     out = {f"{prefix}H": _renyi_bits(w, 1.0), f"{prefix}c_hf2": float(w.max())}
@@ -153,6 +157,7 @@ def _spectral(w, prefix=""):
     return out
 
 
+# CLAUDE
 def entropy_bits(wfn, coeffs, nbasis, nelec, gap=None):
     """
     Spectral and marginal entropies of one solved wavefunction, all in bits.
@@ -199,12 +204,14 @@ def entropy_bits(wfn, coeffs, nbasis, nelec, gap=None):
 # wavefunctions
 # ---------------------------------------------------------------------------
 
+# CLAUDE
 def _solve(ham, wfn, max_cycle):
     op = pyci.sparse_op(ham, wfn)
     energies, coeffs = op.solve(maxiter=max_cycle)
     return float(energies[0]), coeffs[0], op
 
 
+# CLAUDE
 def diagonal(op, n):
     """
     H_DD for every determinant, from the operator already built for the solve.
@@ -218,6 +225,7 @@ def diagonal(op, n):
                        dtype=float, count=n) + op.ecore
 
 
+# CLAUDE
 def _entropies(ham, wfn, nelec, max_cycle):
     """Solve, take the diagonal, and return both weight- and energy-weighted
     entropies. The variational check E <= min(H_DD) catches an ecore slip."""
@@ -233,6 +241,7 @@ def _entropies(ham, wfn, nelec, max_cycle):
     return S, spectral, energy, n
 
 
+# CLAUDE
 def cisd_entropy(ham, nelec, max_cycle=1000):
     """Entropies of a CISD vector — the predictors that need no exact solve."""
     wfn = pyci.fullci_wfn(ham.nbasis, *nelec)
@@ -242,6 +251,7 @@ def cisd_entropy(ham, nelec, max_cycle=1000):
     return _entropies(ham, wfn, nelec, max_cycle)
 
 
+# CLAUDE
 def fci_entropy(ham, nelec, max_cycle=1000):
     """Entropies of the exact vector — the surrogate check and the theory check."""
     wfn = pyci.fullci_wfn(ham.nbasis, *nelec)
@@ -250,6 +260,7 @@ def fci_entropy(ham, nelec, max_cycle=1000):
     return S, spectral, energy
 
 
+# CLAUDE
 def hf_entropy(ham, nelec):
     """Must be exactly 0 — one determinant carries no entropy. Cheap guard
     against a sign or ordering error in the marginal bookkeeping."""
@@ -265,6 +276,7 @@ BASE_KEYS = ["H"] + [f"R{a:g}" for a in RENYI_ORDERS] + ["c_hf2"]
 SPECTRAL_KEYS = BASE_KEYS + [f"E{k}" for k in BASE_KEYS]
 
 
+# CLAUDE
 def _ndet(wfn):
     try:
         return int(len(wfn))
@@ -288,6 +300,7 @@ SCHEMAS = {
 }
 
 
+# CLAUDE
 def measured_requirements(pattern):
     """{config label: (n_needed, n_fci, fraction)} from the scan CSVs. Keyed by
     field count because the writer's columns changed mid-scan."""
@@ -310,6 +323,7 @@ def measured_requirements(pattern):
     return out
 
 
+# CLAUDE
 def already_done(path):
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return set()
@@ -325,6 +339,7 @@ COLUMNS = (["config", "family", "bond_length", "basis", "nelecas", "norbcas",
            + ["S_hf", "seconds"])
 
 
+# CLAUDE
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scan", default="data/subspace/subspace_*.csv",

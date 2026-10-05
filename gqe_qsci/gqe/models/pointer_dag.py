@@ -53,6 +53,7 @@ except ImportError:  # pragma: no cover - optional dependency
     GATConv = None
 
 
+# CLAUDE
 def _require_pyg():
     if GATConv is None:
         raise ImportError(
@@ -77,6 +78,7 @@ class PointerDAGGNNPolicy(Policy):
         angle a single is a somewhat arbitrary gate.
     """
 
+    # CLAUDE
     def __init__(
         self,
         pool,
@@ -120,22 +122,26 @@ class PointerDAGGNNPolicy(Policy):
 
     # -- molecule binding ---------------------------------------------------
 
+    # CLAUDE
     @property
     def n_qubits(self):
         """One DAG wire per spin-orbital, so the two counts are the same."""
         return self.space.n_orbitals
 
+    # CLAUDE
     def set_molecule(self, bundle):
         """Re-point at another molecule; see PointerActionSpace.set_molecule."""
         self.space.set_molecule(bundle)
 
     # -- DAG plumbing -------------------------------------------------------
 
+    # CLAUDE
     def _init_dag_state(self, batch: int, device: torch.device):
         frontier = torch.arange(self.n_qubits, device=device).unsqueeze(0)
         return frontier.expand(batch, -1).clone(), [[] for _ in range(batch)], \
             [[] for _ in range(batch)]
 
+    # CLAUDE
     def _node_embeddings(self, orb_keys, gate_embs, batch):
         """(B, n_qubits + ngates, H). Qubit wires ARE orbitals, so their node
         embeddings are the orbital keys directly — no separate qubit encoder."""
@@ -149,6 +155,7 @@ class PointerDAGGNNPolicy(Policy):
             )
         return torch.cat(parts, dim=1)
 
+    # CLAUDE
     def _pool_frontier(self, node_embs, frontier, edge_srcs, edge_dsts, device):
         """One GNN pass over the partial DAG -> (B, H) pooled frontier."""
         B, num_nodes, _ = node_embs.shape
@@ -176,6 +183,7 @@ class PointerDAGGNNPolicy(Policy):
         idx = frontier_s.unsqueeze(-1).expand(-1, -1, h3.shape[-1])
         return h3.gather(1, idx).mean(dim=1)                       # (B, H)
 
+    # CLAUDE
     def _advance(self, picks, gate_node, frontier, edge_srcs, edge_dsts):
         """Wire the new gate to the frontier of every orbital it touches."""
         for b in range(picks.shape[0]):
@@ -186,6 +194,7 @@ class PointerDAGGNNPolicy(Policy):
 
     # -- the rollout, shared by sampling and replay --------------------------
 
+    # CLAUDE
     def _rollout(self, batch, inv_temperature, device, forced=None,
                  return_entropy=False):
         """
@@ -222,12 +231,14 @@ class PointerDAGGNNPolicy(Policy):
 
     # -- Policy interface ---------------------------------------------------
 
+    # CLAUDE
     def act(self, state, inv_temperature):
         raise RuntimeError(
             "PointerDAGGNNPolicy generates whole sequences via "
             "sample_sequence(); act() is not supported."
         )
 
+    # CLAUDE
     def sample_sequence(self, state, inv_temperature):
         B = state["idx"].shape[0]
         device = state["idx"].device
@@ -236,6 +247,7 @@ class PointerDAGGNNPolicy(Policy):
         state["idx"] = torch.cat((state["idx"], ops), dim=1)
         return state
 
+    # CLAUDE
     def log_prob(self, indices, inv_temperature, return_entropy=False,
                  reveal_step=None):
         """

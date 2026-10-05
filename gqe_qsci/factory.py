@@ -53,6 +53,7 @@ class MoleculeBundle:
     x_value: float | None = None    # scan coordinate (e.g. bond length) for
     x_label: str = "x"              # summary plots; None for non-scan sets
 
+    # CLAUDE
     @property
     def feat_dim(self) -> int:
         return int(self.operator_features.shape[1])
@@ -64,6 +65,7 @@ class Factory:
         self.estimator = None
         self.operator_pool = None
 
+    # CLAUDE
     def create_model(self, cfg, op_pool=None):
         # op_pool lets multi-molecule callers size the model from a specific
         # bundle's pool instead of the cached single-molecule pool.
@@ -141,6 +143,7 @@ class Factory:
             case _:
                 raise ValueError(f"Unknown loss function name: {loss_fn_name}")
     
+    # CLAUDE
     def _make_pool(self, cfg, molecule):
         """Build an operator pool for a given molecule (no caching)."""
         dedup = cfg.operator_pool.get("dedup_excitations", False)
@@ -167,6 +170,7 @@ class Factory:
             case _:
                 raise ValueError(f"Unknown operator pool specification: {cfg.operator_pool.spec}")
 
+    # CLAUDE
     @staticmethod
     def _resolve_max_dim(cfg, molecule) -> int:
         """
@@ -213,6 +217,7 @@ class Factory:
         )
         return resolved
 
+    # CLAUDE
     def _make_qsci_pipeline(self, cfg, molecule, operator_pool):
         """Build a QSCI pipeline for a given molecule + pool (no caching)."""
         numQPUs = cudaq.get_target().num_qpus()
@@ -225,6 +230,7 @@ class Factory:
             eigsh_kwargs=cfg.qsci.eigsh_kwargs,
         )
 
+    # CLAUDE
     def create_operator_pool(self, cfg):
         if self.operator_pool is not None:
             return self.operator_pool
@@ -232,6 +238,7 @@ class Factory:
         self.operator_pool = self._make_pool(cfg, molecule)
         return self.operator_pool
 
+    # CLAUDE
     def create_qsci_pipeline(self, cfg):
         molecule = self.create_molecule(cfg)
         operator_pool = self.create_operator_pool(cfg)
@@ -241,6 +248,7 @@ class Factory:
     # Multi-molecule (Phase 2+)
     # ------------------------------------------------------------------ #
 
+    # CLAUDE
     def _expand_molecule_set(self, cfg):
         """
         Turn a molecule_set config into a list of
@@ -330,6 +338,7 @@ class Factory:
             raise ValueError("molecule_set expanded to zero molecules.")
         return entries
 
+    # CLAUDE
     def create_molecule_bundles(self, cfg) -> dict[str, MoleculeBundle]:
         """
         Build one MoleculeBundle per molecule in cfg.molecule_set, keyed by name

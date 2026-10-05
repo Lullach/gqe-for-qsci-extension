@@ -23,6 +23,7 @@ class Sampler:
         self.mpi = mpi
         self.numQPUs = numQPUs
                 
+    # CLAUDE
     @torch.no_grad()
     def run(self, state: dict): 
         """Sample quantum states in computational basis.  

@@ -31,6 +31,7 @@ except ImportError:
     GATConv = None
 
 
+# CLAUDE
 def _require_pyg():
     if not _TORCH_GEOMETRIC_AVAILABLE:
         raise ImportError(
@@ -67,6 +68,7 @@ class _CircuitGNNBase(Policy):
                  GNN's sparsity advantage.
     """
 
+    # CLAUDE
     def __init__(
         self,
         vocab_size: int,
@@ -135,6 +137,7 @@ class _CircuitGNNBase(Policy):
         edge_index = _build_edge_index(ngates, graph_type)
         self.register_buffer("edge_index", edge_index)   # (2, E)
 
+    # CLAUDE
     def _batch_edge_index(self, batch_size: int) -> torch.Tensor:
         """
         Replicate the single-graph edge index for a batch of B graphs by
@@ -150,6 +153,7 @@ class _CircuitGNNBase(Policy):
         ei = ei + offsets.view(-1, 1, 1)
         return ei.permute(1, 0, 2).reshape(2, -1)                 # (2, B*E)
 
+    # CLAUDE
     def _logits(self, tokens: torch.Tensor, timestep) -> torch.Tensor:
         """
         tokens   : (B, L)  gate indices (may include [MASK] special token)
@@ -198,12 +202,14 @@ class _CircuitGNNBase(Policy):
             return self.output(h, keys=keys)                       # (B, L, vocab_size)
         return self.output(h)                                      # (B, L, vocab_size)
 
+    # CLAUDE
     def act(self, state, inv_temperature):
         raise RuntimeError(
             f"{self.__class__.__name__} generates whole sequences via "
             "sample_sequence(); act() is not supported."
         )
 
+    # CLAUDE
     def set_molecule(self, bundle):
         """
         Re-point at bundle's molecule. Swaps the operator menu (also the tied
@@ -217,6 +223,7 @@ class _CircuitGNNBase(Policy):
         self.output.set_features(bundle.operator_features, update_stats=False)
         self._refresh_mask_token()
 
+    # CLAUDE
     def _refresh_mask_token(self):
         pass
 
@@ -225,6 +232,7 @@ class _CircuitGNNBase(Policy):
 # Edge index construction helper
 # ---------------------------------------------------------------------------
 
+# CLAUDE
 def _build_edge_index(ngates: int, graph_type: str) -> torch.Tensor:
     """
     Build the static (2, E) edge index for a single graph of ngates nodes.
@@ -270,6 +278,7 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
     Use config  model=diffusion_gnn_absorbing  to select this variant.
     """
 
+    # CLAUDE
     def __init__(
         self,
         vocab_size,
@@ -298,11 +307,13 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
         alpha = _make_alpha_schedule(diffusion_steps, noise_schedule)
         self.register_buffer("alpha", alpha)                       # (T+1,)
 
+    # CLAUDE
     def _refresh_mask_token(self):
         self.mask_token = self.vocab_size
 
     # --- reverse process / sampling ----------------------------------------
 
+    # CLAUDE
     def sample_sequence(self, state, inv_temperature):
         """
         Generate gate sequence via the absorbing reverse process.
@@ -364,6 +375,7 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
 
     # --- log-probability ---------------------------------------------------
 
+    # CLAUDE
     def log_prob(self, indices, inv_temperature, return_entropy=False, reveal_step=None):
         """
         Exact log-probability of the sampled reverse trajectory (DDPO-style):

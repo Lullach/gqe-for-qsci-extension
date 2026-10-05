@@ -31,11 +31,13 @@ class TemperatureScheduler(ABC):
         below (`current_beta`, not `current_temperature`).
     """
 
+    # CLAUDE
     @abstractmethod
     def get_inverse_temperature(self):
         """Return the current inverse temperature beta (float)."""
         pass
 
+    # CLAUDE
     @abstractmethod
     def update(self, **kwargs):
         """Advance scheduler state by one training iteration.
@@ -61,14 +63,17 @@ class DefaultScheduler(TemperatureScheduler):
         delta: Amount to increase beta each iteration
     """
 
+    # CLAUDE
     def __init__(self, start, delta) -> None:
         self.start = start
         self.delta = delta
         self.current_beta = start
 
+    # CLAUDE
     def get_inverse_temperature(self):
         return self.current_beta
 
+    # CLAUDE
     def update(self, **kwargs):
         """Increment beta by delta (sharpens the policy over training).
 
@@ -97,9 +102,11 @@ class CosineScheduler(TemperatureScheduler):
         self.current_iter = 0
         self.current_beta = (maximum + minimum) / 2
 
+    # CLAUDE
     def get_inverse_temperature(self):
         return self.current_beta
 
+    # CLAUDE
     def update(self, **kwargs):
         """Advance beta along the cosine cycle.
 
@@ -144,14 +151,17 @@ class VarBasedScheduler(TemperatureScheduler):
     either direction as a rough heuristic, not a principled signal.
     """
 
+    # CLAUDE
     def __init__(self, initial, delta, target_var) -> None:
         self.delta = delta
         self.current_beta = initial
         self.target_var = target_var
 
+    # CLAUDE
     def get_inverse_temperature(self):
         return self.current_beta
 
+    # CLAUDE
     def update(self, **kwargs):
         """Adjust beta based on energy variance (see class docstring for direction).
 

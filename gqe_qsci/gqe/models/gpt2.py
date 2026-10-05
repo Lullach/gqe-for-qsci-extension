@@ -34,10 +34,12 @@ class _FeatureWTE(torch.nn.Module):
     are derived from operator features rather than looked up by index.
     """
 
+    # CLAUDE
     def __init__(self, scorer: OperatorScorer):
         super().__init__()
         self.scorer = scorer
 
+    # CLAUDE
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.scorer.keys()[input_ids]
 
@@ -53,15 +55,18 @@ class _ScorerHead(torch.nn.Module):
     de-duplicates by identity, so it is optimized once.)
     """
 
+    # CLAUDE
     def __init__(self, scorer: OperatorScorer):
         super().__init__()
         self.scorer = scorer
 
+    # CLAUDE
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return self.scorer(hidden_states)
 
 
 class GPT2Model(GPT2LMHeadModel, Policy):
+    # CLAUDE
     def __init__(
         self,
         small,
@@ -98,6 +103,7 @@ class GPT2Model(GPT2LMHeadModel, Policy):
             self.set_input_embeddings(_FeatureWTE(scorer))   # transformer.wte
             self.lm_head = _ScorerHead(scorer)
 
+    # CLAUDE
     def set_molecule(self, bundle):
         """
         Re-point at bundle's molecule. wte and lm_head share ONE scorer, so
