@@ -1,0 +1,44 @@
+// Open the repo INSIDE the gqe_qsci_cpu container, so the VS Code debugger,
+// interactive window and test runner have pyscf, pyci and cudaq — which no
+// Windows Python here has. In VS Code: "Dev Containers: Reopen in Container".
+// The repo is bind-mounted, so edits go straight to your files on Windows.
+{
+  "name": "gqe-qsci (cpu container)",
+  "image": "gqe_qsci_cpu",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+
+  "containerEnv": {
+    "PYTHONPATH": "/workspace",
+    "OMPI_MCA_pml": "ob1",
+    "OMPI_MCA_btl": "self,tcp",
+    "OMPI_MCA_opal_warn_on_missing_libcuda": "0",
+    "WANDB_MODE": "offline",
+    // There is no Docker inside the container, so the pre-commit hook's
+    // default (start a container) cannot work here. Its INVARIANTS_CMD
+    // override runs the same tests directly instead.
+    "INVARIANTS_CMD": "python3 -m pytest tests/invariants -q -p no:cacheprovider"
+  },
+
+  // Runs once when the container is first created. torch_geometric is needed
+  // by the GNN models but not in the image; snoop traces a function line by
+  // line. safe.directory: the bind mount is owned by another user, which git
+  // would otherwise refuse to work in.
+  "postCreateCommand": "pip install -q torch_geometric snoop && git config --global --add safe.directory /workspace",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.debugpy",
+        "ms-toolsai.jupyter"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.analysis.extraPaths": ["/workspace", "/workspace/hpc"],
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests/invariants"]
+      }
+    }
+  }
+}
