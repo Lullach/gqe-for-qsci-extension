@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# commit-msg: a commit that touches core (.githooks/core_paths) must contain
+#
+#   Understood-by: Lukas — <one-line explanation of the change>
+#
+# with a non-empty explanation. An em dash, en dash, "-" or "--" are all
+# accepted as the separator. Lines starting with "#" are ignored.
+#
+# Limitation: `git commit --amend` with nothing newly staged is not seen as
+# touching core, because the check compares the index against HEAD.
+set -uo pipefail
+. "$(git rev-parse --show-toplevel)/.githooks/lib.sh"
+
+[ -z "$(staged_core_files)" ] && exit 0
+
+if grep -v '^#' "$1" | tr -d '\r' |
+        grep -Eq '^Understood-by: Lukas[[:space:]]*(—|–|--?)[[:space:]]*[^[:space:]]'; then
+    exit 0
+fi
+
+echo "commit-msg: this commit touches core, so the message needs a line"
+echo
+echo "    Understood-by: Lukas — <one-line explanation of the change>"
+echo
+echo "with a non-empty explanation. Commit aborted."
+exit 1

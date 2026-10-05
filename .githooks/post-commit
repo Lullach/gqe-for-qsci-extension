@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# post-commit: how many `# CLAUDE` markers core holds now, and the change since
+# the previous commit — is unowned code growing or shrinking? Counts are taken
+# from git itself (this commit and its first parent), so nothing is stored.
+. "$(git rev-parse --show-toplevel)/.githooks/lib.sh"
+
+mapfile -t entries < <(core_entries)
+
+count_at() {
+    git grep -c "# CLAUDE" "$1" -- "${entries[@]}" 2>/dev/null |
+        awk -F: '{ s += $NF } END { print s + 0 }'
+}
+
+now="$(count_at HEAD)"
+if git rev-parse -q --verify HEAD^ >/dev/null; then
+    prev="$(count_at HEAD^)"
+else
+    prev=0
+fi
+printf '# CLAUDE markers in core: %d (%+d since previous commit)\n' \
+    "$now" "$((now - prev))"

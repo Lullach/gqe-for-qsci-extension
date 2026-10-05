@@ -9,3 +9,5 @@
 *.py        text eol=lf
 *.yaml      text eol=lf
 *.yml       text eol=lf
+# Git hooks have no extension, so the *.sh rule above misses them.
+.githooks/* text eol=lf

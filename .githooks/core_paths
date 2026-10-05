@@ -1,0 +1,41 @@
+# CORE PHYSICS: the files the git hooks and the weekly check treat as core.
+#
+# Core = Hamiltonian construction, circuit sampling, QSCI subspace selection
+# and diagonalization, GQE loss and updates. Everything else (plotting, I/O,
+# configs, job scripts, utilities) is not core.
+#
+# One repo-relative path per line. A trailing "/" means everything under that
+# directory; otherwise the line must match a file exactly. "#" starts a comment.
+# This file is the single place the boundary is defined: edit it here, and the
+# hooks and the weekly check follow.
+
+# Hamiltonian construction
+gqe_qsci/molecule.py
+
+# operators and circuit sampling
+gqe_qsci/gqe/operator_pool.py
+gqe_qsci/gqe/utils.py
+gqe_qsci/gqe/sampler.py
+hpc/numpy_sampler.py
+
+# QSCI: subspace selection, diagonalization, refinement, classical baselines
+gqe_qsci/qsci/
+
+# GQE loss and updates (training_step and the rollout/reward path live in
+# train_pipeline.py, mixed with logging; the buffer stores the old log-probs
+# the GRPO ratio uses)
+gqe_qsci/gqe/loss.py
+gqe_qsci/gqe/buffer.py
+gqe_qsci/train_pipeline.py
+
+# physics analyses whose numbers go into the thesis
+hpc/subspace_requirement.py
+hpc/entropy_scan.py
+hpc/energy_vs_overlap.py
+
+# --- borderline, NOT core for now; uncomment to include -------------------
+# gqe_qsci/gqe/models/     policy networks. pointer.py's ExcitationRules and
+#                          the orbital features encode physics constraints
+# gqe_qsci/gqe/scheduler.py  inverse-temperature schedule of the policy
+# gqe_qsci/factory.py      wiring; _resolve_max_dim sets the subspace cap
+# baseline_selection.py    driver for the classical baselines in qsci/
