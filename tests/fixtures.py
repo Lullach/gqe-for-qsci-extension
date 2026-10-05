@@ -106,6 +106,56 @@ def example_seq(s: System, n_gates: int | None = None, seed: int = 0) -> list[in
     return [0] + [int(i) for i in rng.integers(1, len(s.pool), n)]
 
 
+CAPTURE_DIR = os.path.join(REPO, "scratch", "captured")
+
+
+def capture(variables: dict, name: str = "last") -> None:
+    """
+    Save a paused function's variables, to reuse them in a scratch file.
+
+    In the Debug Console, while stopped at a breakpoint:
+
+        from tests.fixtures import capture; capture(locals())
+
+    then in a scratch file:
+
+        from tests.fixtures import load_captured; v = load_captured()
+        v["seq"], v["shots"], v["rng"]      # the real values, as they were
+
+    Only picklable values can be saved. Objects wrapping cudaq or pyscf (the
+    sampler, the pool, the pipeline) are not; rebuild those with the fixtures
+    above, which build them from the same configs as the debug runs (the
+    "Train: H2" debug entry and h2() use the same settings). numpy random
+    generators are saved with their state, so they reproduce the same draws.
+    """
+    import pickle
+
+    os.makedirs(CAPTURE_DIR, exist_ok=True)
+    kept, skipped = {}, []
+    for key, value in variables.items():
+        if key.startswith("__"):
+            continue
+        try:
+            pickle.dumps(value)
+            kept[key] = value
+        except Exception:                                 # noqa: BLE001
+            skipped.append(f"{key} ({type(value).__name__})")
+    path = os.path.join(CAPTURE_DIR, f"{name}.pkl")
+    with open(path, "wb") as f:
+        pickle.dump(kept, f)
+    print(f"saved {sorted(kept)} to {path}")
+    if skipped:
+        print(f"not picklable, rebuild with the fixtures instead: {skipped}")
+
+
+def load_captured(name: str = "last") -> dict:
+    """The variables saved by capture(locals(), name)."""
+    import pickle
+
+    with open(os.path.join(CAPTURE_DIR, f"{name}.pkl"), "rb") as f:
+        return pickle.load(f)
+
+
 def describe(s: System) -> None:
     """Sizes, and one concrete example of each input type, for system s."""
     m, p = s.molecule, s.pool
