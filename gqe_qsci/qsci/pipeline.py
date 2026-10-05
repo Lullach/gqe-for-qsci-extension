@@ -10,7 +10,6 @@ from gqe_qsci.qsci.schema import QSCIResult, QSCISampleResult
 from gqe_qsci.qsci.subspace import DeterminantSubspace
 from gqe_qsci.qsci.refine.pipeline import RefinePipeline
 from gqe_qsci.qsci.statevector import as_scivector, SCIVector
-from gqe_qsci.qsci.diagnostics import boundary_indicators, enpt2_mha
 
 class QSCIPipeline:
     def __init__(
@@ -22,7 +21,6 @@ class QSCIPipeline:
         max_cycle: int = 200,
         enlarge_method: str = "symmetry_completion",
         eigsh_kwargs: dict[str, Any] | None = None,
-        indicators: bool = True,
     ):
         self.mol = molecule
         self.hamiltonian = molecule.cas_hamiltonian
@@ -34,7 +32,6 @@ class QSCIPipeline:
         self.max_dim = max_dim
         self.max_cycle = max_cycle
         self.enlarge_method = enlarge_method
-        self.indicators = indicators
         self.subspace_refiner = RefinePipeline(hamiltonian=self.hamiltonian, nelec=self.nelec, norb=self.norb)
         self.global_refined_scistates = None
 
@@ -45,41 +42,14 @@ class QSCIPipeline:
         )
 
 
-    def _solve(self, subspace: DeterminantSubspace):
+    def diagonalize(self, subspace: DeterminantSubspace) -> tuple[float, SCIVector]:
         wfn = pyci.fullci_wfn(self._pyci_ham.nbasis, *self.nelec)
         for det in subspace.determinants:
             wfn.add_det(det)
 
         op = pyci.sparse_op(self._pyci_ham, wfn)
         energy, coeffs = op.solve(maxiter=self.max_cycle)
-        return float(energy[0]), coeffs[0], wfn
-
-    def diagonalize(self, subspace: DeterminantSubspace) -> tuple[float, SCIVector]:
-        energy, coeffs, _ = self._solve(subspace)
-        return energy, as_scivector(coeffs, subspace.determinants)
-
-    def _diagnose(self, subspace: DeterminantSubspace, energy, coeffs, wfn) -> dict:
-        """
-        Subspace-size indicators for one solved subspace, as QSCISampleResult
-        fields. Empty when disabled. A failure here must never cost a training
-        step, so it degrades to "not measured" rather than raising.
-
-        ENPT2 is the one to trust: replaying the H10 architecture runs, it was
-        hot on every best-so-far circuit, while the two boundary indicators read
-        ~100x lower than on importance-ordered subspaces of the same error and
-        flickered around their thresholds. See NOTES.md.
-        """
-        if not self.indicators:
-            return {}
-        try:
-            ind = boundary_indicators(self._pyci_ham, subspace.determinants,
-                                      coeffs, energy, self.nelec,
-                                      max_cycle=self.max_cycle)
-            return {"tail_weight": ind.tail_weight,
-                    "boundary_mha": ind.boundary_mha,
-                    "pt2_mha": enpt2_mha(self._pyci_ham, wfn, coeffs, energy)}
-        except Exception:                                        # noqa: BLE001
-            return {}
+        return float(energy[0]), as_scivector(coeffs[0], subspace.determinants)
 
     def process(
         self,
@@ -94,8 +64,7 @@ class QSCIPipeline:
             subspace = DeterminantSubspace.from_cudaq_sample_result(counts)
             valid_subspace = subspace.post_select_by_nelec(self.nelec)
             enlarged_subspace = valid_subspace.enlarge(max_dim=self.max_dim, method=self.enlarge_method)
-            energy, coeffs, wfn = self._solve(enlarged_subspace)
-            ci = as_scivector(coeffs, enlarged_subspace.determinants)
+            energy, ci = self.diagonalize(enlarged_subspace)
             sci_states.append(ci)
 
             samples.append(
@@ -107,14 +76,12 @@ class QSCIPipeline:
                     subspace_dim=enlarged_subspace.ndet,
                     cx_count=circuit_gate_numbers.get("cx", 0),
                     total_gates=circuit_gate_numbers.get("total", 0),
-                    **self._diagnose(enlarged_subspace, energy, coeffs, wfn),
                 )
             )
-
+        
         # local refinement
         local_refined_subspace = self.subspace_refiner.process(sci_states, max_dim=self.max_dim)
-        local_refined_energy, local_coeffs, local_wfn = self._solve(local_refined_subspace)
-        local_refined_ci = as_scivector(local_coeffs, local_refined_subspace.determinants)
+        local_refined_energy, local_refined_ci = self.diagonalize(local_refined_subspace)
         local_refined_result = QSCISampleResult(
             seq=None,
             energy=local_refined_energy,
@@ -123,8 +90,6 @@ class QSCIPipeline:
             subspace_dim=local_refined_subspace.ndet,
             cx_count=None,
             total_gates=None,
-            **self._diagnose(local_refined_subspace, local_refined_energy,
-                             local_coeffs, local_wfn),
         )
 
         # global refinement
@@ -135,8 +100,7 @@ class QSCIPipeline:
         else:
             target_sci_states = [self.global_refined_scistates, local_refined_ci]
             global_refined_subspace = self.subspace_refiner.process(target_sci_states, max_dim=self.max_dim)
-            global_refined_energy, global_coeffs, global_wfn = self._solve(global_refined_subspace)
-            global_refined_ci = as_scivector(global_coeffs, global_refined_subspace.determinants)
+            global_refined_energy, global_refined_ci = self.diagonalize(global_refined_subspace)
             self.global_refined_scistates = global_refined_ci
             global_refined_result = QSCISampleResult(
                 seq=None,
@@ -146,8 +110,6 @@ class QSCIPipeline:
                 subspace_dim=global_refined_subspace.ndet,
                 cx_count=None,
                 total_gates=None,
-                **self._diagnose(global_refined_subspace, global_refined_energy,
-                                 global_coeffs, global_wfn),
             )
 
         return QSCIResult(

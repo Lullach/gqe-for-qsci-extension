@@ -41,10 +41,11 @@ COLUMNS = [
     "energy", "R-CASCI", "R-CCSD",
     "subspace_dim", "num_sampled_basis", "num_symmetry_preserving_basis",
     "cx_count", "total_gates", "seq",
-    # subspace-size indicators (gqe_qsci/qsci/diagnostics.py), appended last so
-    # every earlier column keeps its position
-    "tail_weight", "boundary_mha", "pt2_mha",
 ]
+# Files written between 2026-09-30 and 10-05 also carry tail_weight,
+# boundary_mha and pt2_mha (subspace-size indicators, removed; see git tag
+# thesis/subspace-indicators). A resumed run appending to one of them keeps that
+# file's layout and leaves those columns empty.
 
 
 def _iter_samples(result):
@@ -133,8 +134,7 @@ class ResultsWriter:
                         for name in ("energy", "subspace_dim",
                                      "num_sampled_basis",
                                      "num_symmetry_preserving_basis",
-                                     "cx_count", "total_gates", "tail_weight",
-                                     "boundary_mha", "pt2_mha"):
+                                     "cx_count", "total_gates"):
                             # getattr: objects restored from checkpoints written
                             # before a field existed simply lack it
                             row[name] = getattr(s, name, None)

@@ -2562,6 +2562,15 @@ Consequences worth carrying:
 
 ## Live subspace-size indicators (2026-09-30)
 
+> **REMOVED 2026-10-05; code preserved at git tag `thesis/subspace-indicators`.**
+> On the N2 runs (seeds 6-8, which have room in their subspace: cap 170 vs
+> ~102 needed) none of the three indicators separates a TOO-SMALL subspace
+> from one holding the WRONG determinants. They all measure "energy/weight is
+> still missing from this subspace", which is true in both cases. The claim
+> below that ENPT2 signals a subspace-limited plateau is therefore wrong; the
+> H10 runs WERE size-limited, but that is established by the subspace scan,
+> not by the indicators. See "Why the indicators were removed" at the end.
+
 Question: can a run tell, while training, that its plateau is caused by the
 SUBSPACE rather than the policy? Three indicators, all in
 `gqe_qsci/qsci/diagnostics.py`, now logged per circuit and per refined state
@@ -2661,20 +2670,21 @@ One-page summary for other sessions; details are in the five sections above it
   0.16 mHa). "Difficulty is non-monotonic in bond length" holds only at
   chemical accuracy.
 
-**Subspace-size indicators (live in results.csv: tail_weight, boundary_mha,
-pt2_mha; `qsci.indicators`, default on)**
-- The two cheap edge indicators (tail weight, boundary energy) do NOT work on
-  real QSCI subspaces: a sampled subspace's edge is padding, so they flicker
-  around their thresholds. ENPT2 (`pt2_mha`) works: it tracks the true error
-  (83/46/28% of it) and is a lower bound on what a bigger subspace buys.
-- Replayed on the L=15 H10 runs: ENPT2 + a 25-epoch plateau rule would have
-  stopped all 40 runs at epoch 72-98, i.e. ~440 of 540 epochs were spent
-  subspace-limited. Figure: `hpc/plot_indicators.py`.
+**Subspace-size indicators: REMOVED (code at git tag thesis/subspace-indicators)**
+- None of tail weight, boundary energy or ENPT2 tells a too-small subspace from
+  one holding the wrong determinants (N2 seeds 6-8 vs the H10 replays). ENPT2
+  is a decent GAUGE of missing energy (72-100% of the error on N2's refined
+  stage, 28-83% on H10) but not a size signal. Thesis-usable: the negative
+  result, and that sampled subspaces are edge-padded (~100x less tail weight
+  than the optimal subspace at the same error).
+- Kept as data: `data/indicators/*.csv` (H10 replays) and
+  `data/subspace/indicator_calibration.csv`.
 
 **Infrastructure**
-- `hpc/replay_indicators.py` has a numpy statevector simulator (fidelity 1 vs
+- `hpc/numpy_sampler.py` is a numpy statevector simulator (fidelity 1 vs
   cudaq; 0.4 s vs cudaq-CPU's ~55 s per 20-qubit circuit). Conventions it
   depends on: get_state is little-endian; cudaq.sample prints qubit 0 FIRST.
+  Check a new pool with `python3 hpc/numpy_sampler.py experiment=<name>`.
 - `hpc/train_fast_sampler.py` = train.py with that sampler, for any machine
   without a GPU.
 - **Submitting: use `hpc/jobs/packed_cpu.sh` (rt_QC).** Each run uses one core,
@@ -2693,6 +2703,36 @@ pt2_mha; `qsci.indicators`, default on)**
   `docs/run_notes/n2-pool-matched.md`). Split them where the epoch restarts at 0.
 
 **Open**
-- N2 indicator values: only seeds 6-8 have the indicator columns (seeds 1-5
-  files predate them). Not analysed yet.
 - A cheap predictor for R_{1/4} (CISD is not enough) - tabled.
+
+## Why the indicators were removed (2026-10-05)
+
+The N2 pool-matched runs, seeds 6-8, two runs each (GPU job 220006 and rt_QC
+job 223108, split where the epoch restarts), are the contrast case the H10
+replays lacked: their subspace has room (cap 170, ~102 determinants needed at
+2.5 A), and the refined stage reaches 0.9-1.3 mHa.
+
+- ENPT2 fired (plateau < 1 mHa over 25 epochs AND |pt2| > 1.6 mHa) on the
+  refined stage in 5 of 6 runs, at epochs 29-58 with errors of 2-4 mHa. In 4 of
+  those 5 the error then kept falling below chemical accuracy AT THE SAME 170
+  determinants: the plateau was the selection, not the size. It is still a
+  good gauge there (final ENPT2 = 72-100% of the final error).
+- Tail weight fired on the refined stage in 6/6 runs: it measures convergence
+  to ~0.2 mHa, not sufficiency for 1.6 mHa.
+- Boundary energy never fired on the refined stage, but its final values
+  (0.05-0.10 mHa) sat just under the 0.1 threshold, and on H10 it read cold on
+  62% of circuits that were 60-370 mHa off and genuinely size-limited.
+- On the GQE-optimized stage the H10 and N2 value ranges overlap for both cheap
+  indicators (tail weight: H10 median 2.8e-5, N2 max 4.4e-4 above H10's max;
+  boundary: H10 median 0.045 below N2's 90th percentile 0.074). No threshold
+  separates them.
+
+So all three measure "something is still missing from this subspace", true
+both when it is too small and when it holds the wrong determinants. Telling
+those apart needs an outside reference: a same-size swap test, or comparing
+the subspace size against a predicted requirement (the R_{1/4} law, once it
+has a cheap estimator). The live wiring, `diagnostics.py`,
+`calibrate_indicators.py`, `replay_indicators.py` and `plot_indicators.py` are
+at tag `thesis/subspace-indicators`; the numpy simulator moved to
+`hpc/numpy_sampler.py`. GPU and rt_QC runs agreed within seed scatter (refined
+1.15 +/- 0.12 vs 1.35 +/- 0.62 mHa, n=3 each).

@@ -223,7 +223,6 @@ class Factory:
             enlarge_method=cfg.qsci.enlarge_method,
             max_cycle=cfg.qsci.max_cycle,
             eigsh_kwargs=cfg.qsci.eigsh_kwargs,
-            indicators=bool(cfg.qsci.get("indicators", True)),
         )
 
     def create_operator_pool(self, cfg):

@@ -3,7 +3,7 @@ train.py, with the numpy statevector sampler in place of cudaq's.
 
 For anywhere WITHOUT a GPU: the laptop, and rt_QC on ABCI-Q (via
 hpc/jobs/packed_cpu.sh). On the CPU target cudaq takes ~55 s to simulate one
-20-qubit circuit; the numpy simulator in hpc/replay_indicators.py does the same
+20-qubit circuit; the numpy simulator in hpc/numpy_sampler.py does the same
 circuit in well under a second and was checked against cudaq.get_state at
 fidelity 1.000000000000 on every pool it has been used with. Everything else —
 the policy, the QSCI pipeline, refinement, logging — is the unmodified training
@@ -37,7 +37,7 @@ sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.join(REPO, "hpc"))
 
 from gqe_qsci.gqe.sampler import Sampler                          # noqa: E402
-from replay_indicators import sample_counts                       # noqa: E402
+from numpy_sampler import sample_counts                           # noqa: E402
 
 _rng = np.random.default_rng(int(os.environ.get("FAST_SAMPLER_SEED", "0")))
 
