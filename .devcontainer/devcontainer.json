@@ -9,7 +9,9 @@
   "workspaceFolder": "/workspace",
 
   "containerEnv": {
-    "PYTHONPATH": "/workspace",
+    // /workspace/hpc too, so `from numpy_sampler import ...` works from any
+    // folder (e.g. scratch/) without sys.path lines.
+    "PYTHONPATH": "/workspace:/workspace/hpc",
     "OMPI_MCA_pml": "ob1",
     "OMPI_MCA_btl": "self,tcp",
     "OMPI_MCA_opal_warn_on_missing_libcuda": "0",
@@ -22,9 +24,9 @@
 
   // Runs once when the container is first created. torch_geometric is needed
   // by the GNN models but not in the image; snoop traces a function line by
-  // line. safe.directory: the bind mount is owned by another user, which git
-  // would otherwise refuse to work in.
-  "postCreateCommand": "pip install -q torch_geometric snoop && git config --global --add safe.directory /workspace",
+  // line; ipykernel runs the Interactive Window. safe.directory: the bind
+  // mount is owned by another user, which git would otherwise refuse to work in.
+  "postCreateCommand": "pip install -q torch_geometric snoop ipykernel && git config --global --add safe.directory /workspace",
 
   "customizations": {
     "vscode": {

@@ -95,3 +95,7 @@ figures_subspace/
 
 # Lukas's local record of submitted PBS job IDs (successor of "jobsNames etc").
 hpc/jobs/pbs_history.txt
+
+# Lukas's exploration and test code (Interactive Window cells, examples).
+# Local only, never committed.
+scratch/
