@@ -3,8 +3,10 @@
 #   1. weekly-check gate: .git/last_weekly_check must be at most 7 days old
 #   2. invariant tests:   pytest tests/invariants -q must pass
 #
-# INVARIANTS_CMD overrides the test command (e.g. to run it in Docker). The
-# default is `python -m pytest tests/invariants -q`.
+# The tests run in the gqe_qsci_cpu Docker container, the same environment as
+# local runs: it has pytest, pyscf, pyci and cudaq, which no Windows Python
+# here does. Docker Desktop must be running. INVARIANTS_CMD overrides the test
+# command (e.g. on a machine without Docker).
 set -uo pipefail
 . "$(git rev-parse --show-toplevel)/.githooks/lib.sh"
 
@@ -29,20 +31,31 @@ today_s="$(date -d "$(date +%F)" +%s)"
 
 # --- 2. invariant tests ----------------------------------------------------
 cd "$REPO_ROOT" || exit 1
-if [ -z "${INVARIANTS_CMD:-}" ]; then
-    if ! python -c "import pytest" 2>/dev/null; then
+if [ -n "${INVARIANTS_CMD:-}" ]; then
+    echo "pre-commit: $INVARIANTS_CMD"
+    eval "$INVARIANTS_CMD"
+    rc=$?
+else
+    if ! docker info >/dev/null 2>&1; then
         echo
-        echo "pre-commit: pytest is not installed for '$(command -v python)'."
-        echo "Install it, or set INVARIANTS_CMD to a command that runs"
-        echo "tests/invariants. Commit aborted."
+        echo "pre-commit: Docker is not running (the invariant tests run in the"
+        echo "gqe_qsci_cpu container). Start Docker Desktop and commit again."
+        echo "Commit aborted."
         exit 1
     fi
-    INVARIANTS_CMD="python -m pytest tests/invariants -q"
+    echo "pre-commit: pytest tests/invariants -q  (in gqe_qsci_cpu)"
+    # MSYS_NO_PATHCONV: Git for Windows' bash would otherwise rewrite
+    # /workspace into a Windows path. `bash -c`, not a login shell, skips the
+    # CUDA-Q banner; the imports do not need it. -p no:cacheprovider keeps
+    # pytest from writing .pytest_cache into the repo.
+    MSYS_NO_PATHCONV=1 docker run --rm --entrypoint /bin/bash \
+        -v "$REPO_ROOT:/workspace" -w /workspace \
+        -e PYTHONPATH=/workspace -e PYTHONDONTWRITEBYTECODE=1 \
+        -e OMPI_MCA_pml=ob1 -e OMPI_MCA_btl=self,tcp \
+        -e OMPI_MCA_opal_warn_on_missing_libcuda=0 \
+        gqe_qsci_cpu -c "python3 -m pytest tests/invariants -q -p no:cacheprovider"
+    rc=$?
 fi
-
-echo "pre-commit: $INVARIANTS_CMD"
-eval "$INVARIANTS_CMD"
-rc=$?
 case $rc in
     0) ;;
     5) echo "pre-commit: no invariant tests collected yet; not blocking." ;;

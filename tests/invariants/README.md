@@ -35,7 +35,15 @@ The tests are written by Lukas.
 
 ## Environment
 
-The hook runs `python -m pytest` with whatever `python` is on PATH. On the
-laptop that Python has neither pytest nor pyscf/pyci, so tests importing the
-physics code cannot run there yet. Set `INVARIANTS_CMD` to run them elsewhere,
-e.g. in the `gqe_qsci_cpu` container.
+The hook runs the tests in the `gqe_qsci_cpu` Docker container, the same
+environment as local runs, so tests can import the physics code (pyscf, pyci,
+cudaq are all there; no Windows Python here has them). Docker Desktop must be
+running when you commit core; a run takes ~10 s plus the tests themselves.
+`PYTHONPATH` is the repo root, so `import gqe_qsci...` works.
+
+To run them by hand (Git Bash):
+
+    MSYS_NO_PATHCONV=1 docker run --rm --entrypoint /bin/bash -v "$PWD:/workspace" -w /workspace -e PYTHONPATH=/workspace gqe_qsci_cpu -c "python3 -m pytest tests/invariants -q"
+
+`INVARIANTS_CMD` overrides the command the hook uses, e.g. on a machine
+without Docker.
