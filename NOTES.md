@@ -2608,3 +2608,27 @@ per 20-qubit circuit (sample and get_state alike); `numpy_statevector` in
 depends on, both measured: get_state is little-endian (qubit q = bit q), and
 cudaq.sample prints qubit 0 FIRST. Reversing the latter still passes the
 particle-number post-selection and silently gives energies ~800 mHa too high.
+
+## Packing runs into one job, and why on rt_QC (2026-10-05)
+
+Every training job in the PBS history used ONE core of the 32 it was billed for
+(cput/walltime 0.97-0.99), and a seed sweep as a job array rents one 32-core +
+GPU bundle per seed. `hpc/jobs/packed.sh` runs EXPERIMENTS x SEEDS inside one
+job instead.
+
+**Packing on the GPU does not pay.** Job 220006, 8 x n2_pool_matched on one
+rt_QG: each run took 67 min against ~9 min alone, all 8 cores busy throughout
+(cpupercent 799 - CUDA waits by spinning). The runs queue for the shared GPU,
+so the job cost ~2.2 points against ~2.4 for 8 separate jobs. Memory was not the
+limit: ~13 GB once for the container copy plus ~3.4 GB per run (40 GB for 8),
+so 32 runs would fit in 200 GB.
+
+**So pack on rt_QC instead** (`hpc/jobs/packed_cpu.sh`): half the price of rt_QG
+per hour in every category, no GPU, circuits simulated by the numpy sampler
+(`hpc/train_fast_sampler.py`, fidelity 1 against cudaq). The runs share nothing.
+Caveats: shots come from numpy's RNG (statistically equivalent, not
+bit-identical runs); models train on CPU, which large ones (GPT-2, ~43M
+parameters) will feel; rt_QC's memory grant is not measured yet.
+
+Billing (ABCI-Q docs): points are reserved for the full requested walltime at
+submission and refunded at the end, and there is a minimum billed time per job.

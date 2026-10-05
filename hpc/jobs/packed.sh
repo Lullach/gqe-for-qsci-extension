@@ -29,11 +29,16 @@
 # Runs = EXPERIMENTS x SEEDS. Each gets its own log, output directory and W&B
 # run, exactly as if it had been submitted alone.
 #
-# WHAT LIMITS MAXPAR is memory, and it has to be measured: single-run jobs
-# reported 16-29 GB against this resource type's 200 GB, but part of that is
-# the one-off container copy, not the run. resources.log (next to the run logs)
-# samples total RAM and GPU memory every two minutes; read it after a first
-# small job before asking for 32.
+# MEASURED (job 220006, 8 x n2_pool_matched): memory is fine - about 13 GB once
+# for the container copy plus ~3.4 GB per run, so 32 runs need ~120 GB of 200.
+# But the runs QUEUE FOR THE GPU: each took 67 min instead of ~9 min alone, all
+# 8 cores busy (cpupercent 799, CUDA waits by spinning). So packing on rt_QG
+# saved almost nothing (~2.2 points vs ~2.4 for 8 separate jobs).
+#
+# => Prefer hpc/jobs/packed_cpu.sh: the same script on rt_QC (no GPU, half the
+#    price), with circuits simulated in numpy (hpc/train_fast_sampler.py), so
+#    the runs share nothing. This GPU version stays for runs that need the GPU,
+#    e.g. large models or circuits too big for the numpy simulator.
 #
 # Read output:  cat gqe_packed.o<jobid>      (summary table at the end)
 #               ls  logs/packed_<jobid>/      (one log per run + resources.log)
@@ -51,6 +56,15 @@ EXPERIMENTS="${EXPERIMENTS:?set EXPERIMENTS, e.g. -v EXPERIMENTS=archL15_dag_gnn
 SEEDS="${SEEDS:-1}"
 MAXPAR="${MAXPAR:-32}"
 EXTRA="${EXTRA:-}"
+
+# PACKED_MODE=cpu is set by packed_cpu.sh: no GPU, numpy circuit simulation.
+if [ "${PACKED_MODE:-gpu}" = "cpu" ]; then
+    NV_FLAG=""
+    ENTRY=/workspace/hpc/train_fast_sampler.py
+else
+    NV_FLAG="--nv"
+    ENTRY=/workspace/train.py
+fi
 
 # "1-5" -> 1 2 3 4 5 ; "1+3+5" -> 1 3 5
 if [[ "$SEEDS" =~ ^([0-9]+)-([0-9]+)$ ]]; then
@@ -74,6 +88,7 @@ echo "experiments : $EXP_LIST"
 echo "seeds       : $(echo $SEED_LIST)"
 echo "runs        : $n_runs   (at most $MAXPAR at once)"
 echo "extra       : ${EXTRA:-<none>}"
+echo "mode        : ${PACKED_MODE:-gpu}   ($ENTRY)"
 echo "logs        : $LOGDIR"
 echo "date        : $(date)"
 echo "=================================================="
@@ -82,24 +97,35 @@ if [ ! -e "$SIF" ]; then
     echo "ERROR: image not found: $SIF   (build it with hpc/build_image.sh)" >&2
     exit 1
 fi
-nvidia-smi || echo "WARNING: nvidia-smi failed on the host"
-echo
+if [ -n "$NV_FLAG" ]; then
+    nvidia-smi || echo "WARNING: nvidia-smi failed on the host"
+    echo
+fi
 
 # One container copy for all runs.
 . "$REPO/hpc/jobs/_stage_container.sh"
 
 # --- resource sampler: the evidence for how many runs actually fit ----------
 (
-    echo "time,runs_alive,ram_used_gb,ram_total_gb,gpu_util_pct,gpu_mem_used_mb,gpu_mem_total_mb"
+    # RAM is the summed resident memory of THIS job's runs. (The first version
+    # used `free`, which reports the whole node - shared with other jobs - and
+    # read 92 GB on a job that really used 40.) The first word may be any path
+    # ending in python3: the singularity launcher carries the same arguments,
+    # and matching on those would count every run twice.
+    run_re='^[^ ]*python3 /workspace/(hpc/train_fast_sampler|train)\.py'
+    echo "time,runs_alive,ram_runs_gb,gpu_util_pct,gpu_mem_used_mb,gpu_mem_total_mb"
     while true; do
-        # anchored on python3: the singularity launcher carries the same
-        # arguments and would otherwise count every run twice
-        alive=$(pgrep -u "$(id -u)" -f "^python3 /workspace/train.py" | wc -l)
-        ram=$(free -g | awk '/^Mem:/ {print $3 "," $2}')
-        gpu=$(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total \
-                         --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        alive=$(pgrep -u "$(id -u)" -f "$run_re" | wc -l)
+        ram=$(ps -u "$(id -u)" -o rss=,args= | awk -v re="$run_re" '
+                { rss = $1; $1 = ""; sub(/^ /, "") } $0 ~ re { s += rss }
+                END { printf "%.1f", s / 1048576 }')
+        gpu=",,"
+        if [ -n "$NV_FLAG" ]; then
+            gpu=$(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total \
+                             --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        fi
         echo "$(date +%H:%M:%S),$alive,$ram,$gpu"
-        sleep 120
+        sleep "${SAMPLE_EVERY:-120}"
     done
 ) > "$LOGDIR/resources.log" 2>&1 &
 SAMPLER=$!
@@ -109,7 +135,7 @@ declare -A NAME=() START=()
 launch() {
     local exp="$1" seed="$2" name="$1-s$2"
     # Environment set explicitly, as in train.sh: a sandbox drops %environment.
-    singularity exec --nv \
+    singularity exec $NV_FLAG \
         --bind "$REPO:/workspace" \
         --env PYTHONPATH=/workspace \
         --env PYTHONUNBUFFERED=1 \
@@ -122,7 +148,7 @@ launch() {
         --env HYDRA_FULL_ERROR=1 \
         --workdir /workspace \
         "$SIF" \
-        python3 /workspace/train.py experiment="$exp" trainer.seed="$seed" $EXTRA \
+        python3 "$ENTRY" experiment="$exp" trainer.seed="$seed" $EXTRA \
         > "$LOGDIR/$name.log" 2>&1 &
     NAME[$!]="$name"
     START[$!]=$(date +%s)
@@ -163,8 +189,10 @@ for name in $(printf '%s\n' "${!STATUS[@]}" | sort); do
 done
 echo
 echo "peak of the sampled resources (see $LOGDIR/resources.log):"
-awk -F, 'NR>1 { if ($2>a) a=$2; if ($3>r) r=$3; t=$4; if ($6>g) g=$6; gt=$7 }
-         END { printf "  runs alive %d | RAM %d of %d GB | GPU memory %d of %d MB\n", a, r, t, g, gt }' \
+awk -F, 'NR>1 { if ($2>a) a=$2; if ($3>r) r=$3; if ($5>g) g=$5; if ($6 != "") gt=$6 }
+         END { printf "  runs alive %d | RAM of the runs %.1f GB", a, r
+               if (gt != "") printf " | GPU memory %d of %d MB", g, gt
+               printf "\n" }' \
     "$LOGDIR/resources.log"
 echo
 echo "W&B ran offline. Sync from the LOGIN node with:"
