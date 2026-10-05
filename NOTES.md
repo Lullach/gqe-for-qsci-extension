@@ -2639,3 +2639,60 @@ rt_QC is the default for anything the numpy simulator can handle.
 
 Billing (ABCI-Q docs): points are reserved for the full requested walltime at
 submission and refunded at the end, and there is a minimum billed time per job.
+
+## DIGEST of the 2026-09-29 to 10-05 session (read this first)
+
+One-page summary for other sessions; details are in the five sections above it
+(2398-2640) and the commits 26da7ad..ab1a052.
+
+**Subspace requirement (classical, exact; `data/subspace/`)**
+- 196 configurations, 4 families on ABCI-Q. Hydrogen chains need a FLAT ~36%
+  of the CI space from h4 to h12: no scaling advantage for selected CI there,
+  and the H4/H6/H8 -> H10 transfer experiment sits on the hardest family.
+- Chemistry beats size: at an identical 63,504-determinant space h10 needs
+  35.4%, c2h2 8.4%. Over spaces >= 3,000 determinants the median is 4.35%, so
+  `coverage: 0.05` is fine for ordinary molecules and wrong for H-chains.
+- A law: log2 n_needed = 1.011 * R_{1/4} + 0.408 (Renyi-1/4 entropy of |c|^2;
+  R2 0.974, x1.25). Shannon is worse (R2 0.65). Not yet predictive: the CISD
+  surrogate gives R2 0.84 with slope 1.86.
+- Selecting by energy instead of |c| changes the requirement by 1.01x: the
+  oracle's "upper bound only" caveat is quantitatively empty.
+- The collapse past dissociation is an artifact of the 1.6 mHa target (gone at
+  0.16 mHa). "Difficulty is non-monotonic in bond length" holds only at
+  chemical accuracy.
+
+**Subspace-size indicators (live in results.csv: tail_weight, boundary_mha,
+pt2_mha; `qsci.indicators`, default on)**
+- The two cheap edge indicators (tail weight, boundary energy) do NOT work on
+  real QSCI subspaces: a sampled subspace's edge is padding, so they flicker
+  around their thresholds. ENPT2 (`pt2_mha`) works: it tracks the true error
+  (83/46/28% of it) and is a lower bound on what a bigger subspace buys.
+- Replayed on the L=15 H10 runs: ENPT2 + a 25-epoch plateau rule would have
+  stopped all 40 runs at epoch 72-98, i.e. ~440 of 540 epochs were spent
+  subspace-limited. Figure: `hpc/plot_indicators.py`.
+
+**Infrastructure**
+- `hpc/replay_indicators.py` has a numpy statevector simulator (fidelity 1 vs
+  cudaq; 0.4 s vs cudaq-CPU's ~55 s per 20-qubit circuit). Conventions it
+  depends on: get_state is little-endian; cudaq.sample prints qubit 0 FIRST.
+- `hpc/train_fast_sampler.py` = train.py with that sampler, for any machine
+  without a GPU.
+- **Submitting: use `hpc/jobs/packed_cpu.sh` (rt_QC).** Each run uses one core,
+  and packing onto one GPU makes runs queue for it (67 min instead of 9). On
+  rt_QC, 8 N2 runs took 10-11 min side by side, ~1.3 GB each: about a tenth of
+  the points.
+- PySCF cache writes are atomic; ResultsWriter keeps an older file's column
+  layout when a resumed run appends to it.
+
+**Caveats to remember**
+- The same config built a DIFFERENT N2 operator pool locally (118 operators)
+  than on ABCI-Q (136). Gate indices from cluster N2 runs are meaningless
+  locally. Suspected cause: N2's degenerate pi orbitals (unverified).
+- `outputs/gqe-for-qsci/n2-pool-matched-s*` on the cluster each hold SEVERAL
+  stacked runs of the same experiment on different hardware (see
+  `docs/run_notes/n2-pool-matched.md`). Split them where the epoch restarts at 0.
+
+**Open**
+- N2 indicator values: only seeds 6-8 have the indicator columns (seeds 1-5
+  files predate them). Not analysed yet.
+- A cheap predictor for R_{1/4} (CISD is not enough) - tabled.
