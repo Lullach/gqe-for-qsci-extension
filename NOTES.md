@@ -2630,5 +2630,12 @@ Caveats: shots come from numpy's RNG (statistically equivalent, not
 bit-identical runs); models train on CPU, which large ones (GPT-2, ~43M
 parameters) will feel; rt_QC's memory grant is not measured yet.
 
+**Measured on rt_QC (job 223108, the same 8 x n2_pool_matched):** every run
+took 10-11 min, against ~9 min alone on a GPU and 67 min packed onto one, so
+the runs did not slow each other down. Memory 10.4 GB for all 8 (~1.3 GB per
+run), so 32 runs need ~42 GB. Whole job ~14 min including 2 min of container
+staging: roughly a tenth of the points of the GPU-packed job. Packing on
+rt_QC is the default for anything the numpy simulator can handle.
+
 Billing (ABCI-Q docs): points are reserved for the full requested walltime at
 submission and refunded at the end, and there is a minimum billed time per job.
