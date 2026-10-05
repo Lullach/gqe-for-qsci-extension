@@ -86,3 +86,12 @@ hpc/jobsNames etc
 
 # per-run logs written by hpc/jobs/packed.sh
 logs/
+
+# Figures written by the hpc/plot_*.py scripts. Regenerable from data/ and
+# results.csv, so they stay out of the history.
+figures/
+figures_entropy/
+figures_subspace/
+
+# Lukas's local record of submitted PBS job IDs (successor of "jobsNames etc").
+hpc/jobs/pbs_history.txt
