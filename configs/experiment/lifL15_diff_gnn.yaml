@@ -1,0 +1,42 @@
+# @package _global_
+# ARCHITECTURE COMPARISON WITH ROOM IN THE SUBSPACE: LiF at 1.55 A (4,900 determinants), L=15.
+# Model: absorbing diffusion, GNN denoiser.
+#
+# The H10 comparison (archL15_*) could not rank the policies: its 5% cap sat far
+# below what chemical accuracy needs, so every model hit the same truncation
+# floor. Here the cap is 2x the subspace-requirement scan's number (145
+# determinants for chemical accuracy -> qsci.max_dim 290), and the requirement
+# is small enough for an L=15 circuit to reach. So the remaining error measures
+# which determinants the policy selects.
+#
+# Six models x two molecules (n2L15_*, lifL15_*), seeds 1-5, packed on rt_QC:
+#     qsub -W group_list=$ABCIQ_GROUP -v EXPERIMENTS=lifL15_dag_gnn+lifL15_gpt2+...,SEEDS=1-5 hpc/jobs/packed_cpu.sh
+defaults:
+  - override /molecule: lif
+  - override /model: diffusion_gnn_absorbing_features
+
+exp_tag: lifL15-diff-gnn-s${trainer.seed}
+ngates: 15
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: arch-comparison-L15-room
+  tags: ["arch-comparison", "L15", "room-in-subspace", "lif", "diff_gnn"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 50
+  precision: 32-true
+sampler:
+  shots: 10_000
+qsci:
+  coverage: null
+  max_dim: 290

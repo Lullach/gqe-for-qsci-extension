@@ -1,0 +1,17 @@
+# LiF, STO-3G, full valence (8e, 8o) -> 16 qubits, 4,900 determinants.
+#
+# Same active space as the subspace-requirement scan (hpc/subspace_requirement.py,
+# family "lif"), so its numbers apply directly: at 1.55 A (close to the
+# equilibrium bond length) chemical accuracy needs the top 145 determinants by
+# |c| (2.96% of the CI space). An ionic, weakly correlated contrast to N2 at
+# 2.5 A, which is strongly multireference.
+_target_: gqe_qsci.molecule.PySCFMolecule
+geometry:
+  type: linear_chain
+  atoms: ['Li', 'F']
+  bond_length: 1.55
+basis: 'sto-3g'
+nelecas: 8
+norbcas: 8
+spin: 0
+charge: 0
