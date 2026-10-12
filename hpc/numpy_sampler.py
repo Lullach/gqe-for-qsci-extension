@@ -39,7 +39,6 @@ import sys
 import numpy as np
 
 
-# CLAUDE
 def circuit_terms(sampler, seq):
     """The (theta, Pauli word) list the sampler's kernel would receive."""
     coeffs, words = [], []
@@ -49,16 +48,14 @@ def circuit_terms(sampler, seq):
     return coeffs, words
 
 
-# CLAUDE
 def numpy_statevector(n_qubits, n_electrons, coeffs, words):
     """The sampler's kernel: X on the first n_electrons qubits, then
     exp(i theta P) for each Pauli word. Little endian, as cudaq.get_state."""
-    dim = 1 << n_qubits
+    dim = 2 ** n_qubits
     idx = np.arange(dim, dtype=np.int64)
     psi = np.zeros(dim, dtype=np.complex128)
-    occ = 0
-    for q in range(n_electrons):
-        occ |= 1 << q
+    occ = sum(1*2**i for i in range(n_electrons))
+
     psi[occ] = 1.0
 
     for theta, word in zip(coeffs, words):
@@ -76,6 +73,7 @@ def numpy_statevector(n_qubits, n_electrons, coeffs, words):
         src = idx ^ xmask                         # (P psi)[c] = phase(c^x) psi[c^x]
         parity = np.zeros(dim, dtype=np.int64)
         z = zmask
+
         while z:
             low = z & -z
             parity ^= (src & low) != 0
@@ -83,21 +81,22 @@ def numpy_statevector(n_qubits, n_electrons, coeffs, words):
         phase = (1j ** ny) * (1 - 2 * parity)
         p_psi = phase * psi[src]
         psi = np.cos(theta) * psi + 1j * np.sin(theta) * p_psi
+
     return psi
 
 
-# CLAUDE
 def sample_counts(sampler, seq, shots, rng):
     """cudaq-compatible {bitstring: count}, qubit 0 first as cudaq.sample
     prints it."""
     coeffs, words = circuit_terms(sampler, seq)
-    n = sampler.pool.n_qubits
-    psi = numpy_statevector(n, sampler.pool.n_electrons, coeffs, words)
+    n_qubits, n_electrons = sampler.pool.n_qubits, sampler.pool.n_electrons
+
+    psi = numpy_statevector(n_qubits, n_electrons, coeffs, words)
     p = np.abs(psi) ** 2
     p /= p.sum()
     support = np.flatnonzero(p > 1e-16)
     draws = rng.multinomial(shots, p[support])
-    return {format(int(i), f"0{n}b")[::-1]: int(c)
+    return {format(int(i), f"0{n_qubits}b")[::-1]: int(c)
             for i, c in zip(support, draws) if c > 0}
 
 
