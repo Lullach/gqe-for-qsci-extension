@@ -26,7 +26,10 @@
   // by the GNN models but not in the image; snoop traces a function line by
   // line; ipykernel runs the Interactive Window. safe.directory: the bind
   // mount is owned by another user, which git would otherwise refuse to work in.
-  "postCreateCommand": "pip install -q torch_geometric snoop ipykernel && git config --global --add safe.directory /workspace",
+  // core.autocrlf and the ignore entry copy what Git for Windows does on the
+  // same files: without them the container's git sees every CRLF file as fully
+  // rewritten, and .claude/settings.local.json as new.
+  "postCreateCommand": "pip install -q torch_geometric snoop ipykernel && git config --global --add safe.directory /workspace && git config --global core.autocrlf true && mkdir -p ~/.config/git && echo '**/.claude/settings.local.json' >> ~/.config/git/ignore",
 
   "customizations": {
     "vscode": {
