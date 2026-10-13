@@ -3,6 +3,69 @@ import torch
 import torch.nn as nn
 
 
+# =============================================================================
+# STUDY NOTES (walkthrough with scratch/explore_operator_scorer.py, 2026-10-13)
+# =============================================================================
+#
+# In one sentence
+#   At each step the policy describes the partial circuit as a vector (query),
+#   and forward() rates every operator on the menu against that description.
+#
+# The three pieces
+#   query   "what the circuit needs next". The model's summary of the partial
+#           circuit as H numbers. Not human-readable; its meaning is learned.
+#             DAG GNN : mean of the frontier-node embeddings (latest node on each
+#                       qubit) after the GAT layers -> one vector per circuit (B, H)
+#             GPT-2 / diffusion : one hidden state per position          (B, L, H)
+#   keys    "what each operator offers". Each operator's 11 physical features
+#           (FEATURE_NAMES in operator_pool.py), z-scored per column, then
+#           passed through op_encoder (Linear -> GELU -> Linear)          (V, H)
+#   forward query @ keys.T * 1/sqrt(H): one score per operator    (B, V) / (B, L, V)
+#
+# Letters
+#   B batch (circuits in parallel)  H hidden size (model setting)
+#   L circuit length (positions)    V number of operators in the pool (menu)
+#   Real run (archL15_dag_gnn, H10): B=10, H=128, L=15, V=546, 20 qubits.
+#   No weight has V in its shape, so the same weights can score any menu size,
+#   which is why a different molecule's menu can be plugged in.
+#
+# Sign convention (easy to get wrong)
+#   Every model samples from softmax(-inv_temperature * score). A LOW score
+#   means LIKELY. A high query.key means "avoid this operator".
+#
+# How the DAG GNN uses it (dag_gnn.py, sample_sequence)
+#   node_tokens (B, n_qubits+L) -> embeddings (B, nodes, H) -> 6 GAT layers
+#   -> gather frontier (B, n_qubits, H) -> mean -> pooled (B, H)
+#   -> _scaled_logits -> self.operator_head(pooled) -> (B, V) -> sample 1 op each
+#   Repeated once per gate (L times). There is no per-qubit scoring: the frontier
+#   is averaged BEFORE scoring, so "which qubits" survives only implicitly.
+#
+# Python / PyTorch details
+#   scorer(query)   nn.Module.__call__ runs any hooks, then self.forward(query).
+#                   The torch frames in between are hidden by the debugger's
+#                   "Just My Code" (set "justMyCode": false to see them).
+#   hooks           functions attached with register_forward_hook etc. that run
+#                   on every call. This repo registers none.
+#   keys=...        pass precomputed keys when the same forward pass also uses
+#                   them as the INPUT embedding (weight tying, gnn.py /
+#                   diffusion.py), so the menu is encoded once, not twice.
+#   .detach()       same tensor without the autograd graph; .numpy() requires it
+#                   for tensors that require grad. Shares memory (no copy).
+#
+# Normalization
+#   z = (x - column mean over operators) / column std. A raw 0 does not stay 0.
+#   With only 2 operators (H2) every varying column becomes exactly +-0.707
+#   (= 1/sqrt(2), whatever the values); constant columns become 0.
+#   In training, train_pipeline.py overrides the stats via set_normalization()
+#   over ALL training molecules; set_molecule() then calls
+#   set_features(..., update_stats=False) so the scale stays fixed.
+#   (Minor: torch.std here uses n-1, np.std in train_pipeline uses n.)
+#
+# Identical feature rows -> identical keys -> identical scores. Expected for
+# the commuting Pauli fragments of one excitation (only_use_first_pauli=false).
+# =============================================================================
+
+
 class OperatorScorer(nn.Module):
     """
     Feature-based replacement for a fixed ``Linear(H, V)`` operator head.

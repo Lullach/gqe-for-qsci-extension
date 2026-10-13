@@ -99,8 +99,6 @@ def sample_counts(sampler, seq, shots, rng):
     return {format(int(i), f"0{n_qubits}b")[::-1]: int(c)
             for i, c in zip(support, draws) if c > 0}
 
-
-# CLAUDE
 def verify(sampler, seq):
     """Fidelity of the numpy statevector against cudaq.get_state for one
     circuit. Slow: the cudaq half takes about a minute at 20 qubits."""

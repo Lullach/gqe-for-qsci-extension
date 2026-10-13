@@ -31,6 +31,15 @@ class Determinant(np.ndarray):
         return arr.view(cls)
     
     def is_nelec_preserving(self, nelec: tuple[int, int]) -> bool:
+        '''
+        Determinant is just two uint64 values: [alpha, beta]. 
+        What happens is say, we have a physical determinant like |110010>.
+        Then that means one up(alpha) electron and one down(beta) electron in orbital 0.
+        No electrons in orbital 1. One up electron in orbital 2.
+        This is stored as two uint64 values. self[0] = 101 (binary) = 5 (decimal), 
+        self[1] = 001 (binary) = 1 (decimal). 
+        '''
+        
         return self[0].bit_count() == nelec[0] and self[1].bit_count() == nelec[1]
 
     @classmethod
@@ -54,6 +63,7 @@ class Determinant(np.ndarray):
         return cls([alpha, beta])
     
     def generate_group_for_totalspin_symmetry(self) -> np.ndarray:
+        # check explore_symmetry_completion.py for a good example 
         """For a single determinant, enumerate all spin assignments on open-shell orbitals (fixing #alpha(open))."""
         a = int(self[0])
         b = int(self[1])

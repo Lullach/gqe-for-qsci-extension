@@ -8,6 +8,13 @@
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "workspaceFolder": "/workspace",
 
+  // Claude Code's login, settings and memory live in a named Docker volume,
+  // so they survive "Rebuild Container". CLAUDE_CONFIG_DIR (below) moves
+  // .claude.json into that same folder; by default it sits in ~ and is lost.
+  "mounts": [
+    "source=gqe-qsci-claude-config,target=/root/.claude,type=volume"
+  ],
+
   "containerEnv": {
     // /workspace/hpc too, so `from numpy_sampler import ...` works from any
     // folder (e.g. scratch/) without sys.path lines.
@@ -16,6 +23,7 @@
     "OMPI_MCA_btl": "self,tcp",
     "OMPI_MCA_opal_warn_on_missing_libcuda": "0",
     "WANDB_MODE": "offline",
+    "CLAUDE_CONFIG_DIR": "/root/.claude",
     // There is no Docker inside the container, so the pre-commit hook's
     // default (start a container) cannot work here. Its INVARIANTS_CMD
     // override runs the same tests directly instead.
@@ -36,7 +44,8 @@
       "extensions": [
         "ms-python.python",
         "ms-python.debugpy",
-        "ms-toolsai.jupyter"
+        "ms-toolsai.jupyter",
+        "anthropic.claude-code"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/usr/bin/python3",

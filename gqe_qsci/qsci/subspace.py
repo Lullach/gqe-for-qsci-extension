@@ -51,6 +51,7 @@ class DeterminantSubspace:
         for det in self.determinants:
             group = np.asarray(det.generate_group_for_totalspin_symmetry(), dtype=np.uint64)
             if group.ndim == 1:
+                #maybe better to ensure the shape from det.generate_group_for_totalspin_symmetry() 
                 group = group.reshape(1, 2)
             elif group.ndim == 2:
                 if group.shape[1] != 2:

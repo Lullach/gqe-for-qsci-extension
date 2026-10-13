@@ -42,14 +42,24 @@ class QSCIPipeline:
         )
 
 
-    # CLAUDE
     def diagonalize(self, subspace: DeterminantSubspace) -> tuple[float, SCIVector]:
+        # CLAUDE
+        # No duplicates may reach pyci: as_scivector below pairs the CI vector
+        # with subspace.determinants by position, so the two must match one to
+        # one. Checked here in Python, independent of what pyci's add_det does
+        # with a duplicate.
+        keys = {(int(a), int(b)) for a, b in subspace.determinants}
+        if len(keys) != subspace.ndet:
+            raise ValueError(
+                f"{subspace.ndet - len(keys)} duplicate determinant(s) in a "
+                f"subspace of {subspace.ndet}"
+            )
         wfn = pyci.fullci_wfn(self._pyci_ham.nbasis, *self.nelec)
         for det in subspace.determinants:
             wfn.add_det(det)
 
         op = pyci.sparse_op(self._pyci_ham, wfn)
-        energy, coeffs = op.solve(maxiter=self.max_cycle)
+        energy, coeffs = op.solve(maxiter=self.max_cycle, tol=self.eigsh_kwargs.get("tol", 1e-12))
         return float(energy[0]), as_scivector(coeffs[0], subspace.determinants)
 
     def process(
@@ -59,11 +69,13 @@ class QSCIPipeline:
         sampled_counts = self.sampler.run(states)
         samples = []
         sci_states = []
-
         for seq, counts in zip(states["idx"].tolist(), sampled_counts):
             circuit_gate_numbers = self.operator_pool.get_gate_count(seq)
             subspace = DeterminantSubspace.from_cudaq_sample_result(counts)
             valid_subspace = subspace.post_select_by_nelec(self.nelec)
+            #print(subspace.determinants)
+            #print(valid_subspace.determinants)
+            #print(f"subspace.ndet={subspace.ndet}, valid_subspace.ndet={valid_subspace.ndet}")
             enlarged_subspace = valid_subspace.enlarge(max_dim=self.max_dim, method=self.enlarge_method)
             energy, ci = self.diagonalize(enlarged_subspace)
             sci_states.append(ci)
