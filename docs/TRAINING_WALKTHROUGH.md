@@ -336,8 +336,11 @@ residual below still lines up.
 
 **One round, concretely.** Take the graph after step 0 — wires 0, 1, 4, 5 feed
 gate node `g6`; wires 2, 3 are untouched — and give every node a 2-dimensional
-vector (real $H$ is 128; two is just legible). PyG's `GATConv` adds a **self-loop**
-by default, so `g6` attends to itself as well as to its four wires:
+vector. Two is the hidden size $H$ here: every node vector, the query and every
+operator key have length $H$ (real $H$ is 128; two is just legible). PyG's `GATConv` adds a **self-loop**
+by default, so `g6` attends to itself as well as to its four wires.
+The vector on the qubits is the embedding of the orbital features. 
+The one on the gate is the encoding of the gate physical features (keys from operator_scorer):
 
 ```mermaid
 flowchart LR
@@ -359,10 +362,19 @@ rounds do not destroy the input: each layer *adds* a correction instead of
 replacing the vector. Without it, repeated neighbour-averaging drives every node
 toward the same vector — the standard over-smoothing failure of deep GNNs.
 
+So the aggregate is only an intermediate: its one use is computing the new
+$h_{g6}$, and then it is discarded. In code the whole update is one line,
+`h = h + F.gelu(norm(gnn_layer(h, edge_index)))`, where `gnn_layer(...)` is the
+aggregate and `h +` is the residual.
+
 Wires 2 and 3 have no neighbours at this point, so they aggregate only their own
 self-loop and still come out defined: $[0.041, 1.841]$ and $[-0.059, 1.741]$.
 (Unplaced gate slots are updated the same way and then ignored — pooling reads
 frontier nodes only.)
+
+Every node is updated in the same layer, all at once, and the next layer starts
+from these new vectors. The model repeats this `num_layers` = 6 times; one round
+is shown here to keep the arithmetic small.
 
 **Then pooling**, which is what makes the multiplicity in stage 4 concrete. The
 frontier is `[6,6,2,3,6,6]`, so averaging over the six *wires* gives
@@ -372,6 +384,59 @@ $$\frac{4 h_{g6} + h_{q2} + h_{q3}}{6} = [0.558,\ 0.825]$$
 whereas averaging over the three *distinct* nodes would give $[0.275, 1.308]$ — a
 materially different query. `g6` counts four times because it is the frontier of
 four wires.
+
+This query is the only thing passed on. Everything the policy knows about the
+circuit so far is in these $H$ numbers.
+
+**Then scoring: choosing the next gate.** The query is compared with every
+operator's key (stage 5 below gives the general formula). Take a toy menu of
+three operators A, B, C with 2-D keys (not the trace's pool):
+
+| op | key | $z = \langle q, \text{key} \rangle / \sqrt{2}$ | $-\beta z$, $\beta = 1$ | $p$ ($\beta = 1$) | $p$ ($\beta = 5$) |
+|---|---|---|---|---|---|
+| A | $[1, 0]$ | $0.395$ | $-0.395$ | 0.17 | 0.001 |
+| B | $[0, 1]$ | $0.583$ | $-0.583$ | 0.14 | 0.000 |
+| C | $[-1, -1]$ | $-0.978$ | $+0.978$ | **0.68** | **0.999** |
+
+Because of the minus sign, the **lowest** $z$ wins: C is most likely because its
+key points *away* from the query. Raising $\beta$ sharpens the distribution — at
+$\beta = 1$ the policy still explores, at $\beta = 5$ it nearly always picks C.
+If the canonical mask forbade C, its entry would become $-\infty$, $p_C = 0$, and
+the rest renormalise to A 0.55, B 0.45. Then `Categorical(logits=scaled).sample()`
+draws one operator.
+
+**Then the graph grows, and the vectors are rebuilt.** Say C is drawn and acts
+on qubits 2, 3. `_advance_dag` places it in slot 7 and touches integers only:
+
+```
+node_tokens[7] = n_qubits + k_C     # slot 7: UNPLACED → "operator C"
+edges += (2→7), (3→7)               # from each wire's old frontier
+frontier[2] = frontier[3] = 7       # frontier: [6,6,7,7,6,6]
+```
+
+No vector exists for `g7` yet. On the next step `_step_forward` builds every
+node vector from scratch:
+
+1. `_node_table()` recomputes the whole table: `qubit_encoder(orbital_features)`
+   for the wires, `operator_head.keys()` (z-score the 11 features, then
+   `op_encoder`) for the gates, and the `UNPLACED` row.
+2. `table[node_tokens]` looks up the rows. Node 7 holds token $n_q + k_C$, so it
+   gets $\text{key}_C$.
+3. The frontier flag is added: $x_{g7} = \text{key}_C + \text{frontier\_embedding}(1)$.
+4. The 6 GAT layers run; `g7` now mixes with its neighbours q2, q3.
+5. Pooling over wires gives the next query, $(4 h_{g6} + 2 h_{g7}) / 6$.
+
+Two consequences. A gate node's *starting* vector depends only on which operator
+it holds — not on its slot or what came before; all context arrives through the
+frontier flag and the GAT layers. And `g6` and `g7` never exchange messages here:
+they share no qubit, so there is no path between them, and their information
+combines only in the pooling average.
+
+Why rebuild rather than cache? Within a rollout the weights do not change, so the
+table comes out identical each step, but it is cheap ($V$ is a few hundred rows).
+And `log_prob` replays the same sequence with *updated* weights during training,
+where the gradient must flow back through `op_encoder` and `qubit_encoder`, so the
+table has to be recomputed from features anyway.
 
 **Why a graph instead of a sequence.** Gate 9 in §2.2's trace neighbours gates 6,
 7 and 8 because it shares wires with them — not because of where they sit in the
@@ -732,7 +797,7 @@ per-step one; both are defensible, but the trust region is not the same object.
 One caveat carried over from the ELBO switch: the trajectory log-prob sums over
 $L$ instead of averaging over $T$, so its **scale differs from the old ELBO
 runs**. The clip range is scale-sensitive; watch it when comparing to
-pre-`5786019` results. §5.5 is the same problem in a different guise.
+pre-`5786019` results. §5.6 is the same problem in a different guise.
 
 ---
 
@@ -884,7 +949,101 @@ order it samples. `space.to_picks()` raises rather than mis-decode a stale
 index (gated by `hpc/smoke_pointer_dag.py`), but run with
 `trainer.load_checkpoint=false` and a fresh `exp_tag` regardless.
 
-### 5.4 `log_prob`
+### 5.4 The angle, and the part of it that is invented
+
+Every gate carries a rotation angle that nothing in the policy chooses. Where it
+comes from differs by path:
+
+| | doubles | singles |
+|---|---|---|
+| pool (`build_operator_pool`) | $2t$, from the CCSD $t_2$ tensor | $2t$, from CCSD $t_1$ |
+| pointer (`ensure_excitation` → `mp2_angle`) | $2t_{ijab}$ from integrals, no CCSD | **`single_angle`, a constant (0.1 rad)** |
+
+The constant is there because the principled value is *identically zero*, not
+because nobody bothered. Brillouin's theorem says
+$\langle \Phi_0 \vert H \vert \Phi_i^a \rangle = 0$ for canonical Hartree–Fock
+orbitals, so the first-order singles amplitude vanishes and MP2 has no singles
+correction at all. A zero angle makes the gate the identity, wasting a circuit
+slot, so `mp2_angle()` returns `single_angle` instead. That number is not
+physics.
+
+**What the angle actually controls here.** QSCI keeps only the *determinants* a
+circuit samples; the amplitudes are thrown away and the eigenvector comes from
+diagonalizing $H$ in the subspace. So $\theta$ does not enter the energy for a
+fixed subspace the way it would in VQE — it decides **which determinants get
+enough shots to enter the subspace at all**. The arbitrary angle is an
+exploration knob, not a source of energy error. Under a finite shot budget and
+`qsci.max_dim`, though, probability mass is the currency: too small and the
+excited determinant never appears, so the gate is a wasted slot; too large and
+mass moves off the reference onto strings that may not survive post-selection.
+
+Three consequences worth separating:
+
+1. **It is the one molecule-blind number in the pointer path.** Every other
+   quantity — the MP2 angles, the orbital features, the pairwise features — is
+   derived from *that molecule's* integrals. `single_angle` is the same 0.1 for
+   N2 at 2.5 Å and for LiH, where the strongest double may be smaller than it.
+   For a method whose entire claim is transfer across molecules, a constant that
+   means something different in each one is exactly the wrong kind of knob.
+2. **The policy cannot compensate.** It has no angle to choose; its only lever is
+   to stop emitting singles (STOP at pointer step 1). If 0.1 is a bad number the
+   action space quietly collapses to doubles, and that shows up as a low singles
+   fraction rather than as an error.
+3. **The policy cannot even see it.** The pointer reads
+   $[\Delta\varepsilon,\ \text{exchange},\ \text{same\_spin},\ \text{occ\_to\_virt}]$
+   per pair. A double's MP2 angle needs $\langle ij \Vert ab \rangle$, built from
+   $(ia \vert jb)$-type integrals that the exchange feature $\lvert (pq \vert pq)
+   \rvert$ does not carry — so even for doubles the policy perceives a proxy for
+   strength, never the strength itself. For singles there is nothing to perceive:
+   every single carries the same hidden constant.
+
+**Smaller than it looks:** under `only_use_first_pauli: true` a gate is *one
+Pauli string* of the generator scaled by the angle, not $e^{\theta(T - T^\dagger)}$.
+So a double's "physical" $2t$ is also just the strength of a Pauli rotation, not
+an excitation amplitude. Both numbers are heuristics; the real difference is that
+one scales with the molecule and the other does not.
+
+**Bigger than it looks:** a single Pauli fragment need not preserve particle
+number on every basis state it acts on, and `qsci/pipeline.py` post-selects the
+sampled determinants with `post_select_by_nelec`. The angle sets how much
+amplitude goes into strings that are then discarded — shots paid for and thrown
+away.
+
+**What would settle it,** cheapest first:
+
+- **Read the diagnostics that already exist.** The pipeline logs
+  `num_symmetry_preserving_basis` next to `num_sampled_basis` per circuit, so
+  the post-selection waste is measurable today with no new code; pair it with
+  the fraction of sampled gates that are singles. If the policy already avoids
+  singles, the question is moot.
+- **A/B `allow_singles`** at matched budget. If doubles-only is as good, the
+  honest move is to drop singles and delete the constant.
+- **Sweep `single_angle` ∈ {0.02, 0.1, 0.5}.** Flat → document it as harmless
+  and move on. Sloped → it is load-bearing, and a load-bearing arbitrary
+  constant has to become either learned or derived before it goes in a thesis.
+
+**If it is load-bearing**, in rough order of defensibility:
+
+1. `allow_singles: false` — no constant at all. Note that dropping singles
+   *gates* is not the same as dropping singly-excited *determinants*: two
+   overlapping double fragments can land on one, so check rather than assume.
+2. **Learn it** — a fifth pointer step over a small discrete set of angles,
+   applied to doubles too (as a multiplier on $2t$). Makes strength part of the
+   policy and molecule-adaptive; costs a decode step and spreads credit
+   assignment thinner.
+3. **Write the general first-order formula**,
+   $t_i^a = f_{ia}/(\varepsilon_i - \varepsilon_a)$ with $f$ the active-space
+   Fock matrix. This is the correct amplitude and is zero here *only* because
+   `molecule.py` runs `mcscf.CASCI` on canonical HF orbitals, so the Fock block
+   is diagonal. Written this way the code stays correct if the orbital basis ever
+   changes — CASSCF, natural or localized orbitals — and the fallback's domain
+   becomes explicit instead of implicit.
+4. **Second-order singles** from the MP2 doubles: integrals only, still no CCSD,
+   but real work.
+5. **CCSD $t_1$** — one line, and it reintroduces exactly the dependence the
+   pointer action space exists to remove. Diagnostic only.
+
+### 5.5 `log_prob`
 
 Exact, and already a trajectory log-probability — the gate sequence *is* the
 trajectory, so `reveal_step` is accepted and ignored, as in §2.4:
@@ -896,7 +1055,7 @@ sampling and scoring cannot drift apart. Per gate, e.g.
 $[-1.9, -0.7, -1.1, -0.0] \to -3.7$; `space.decode` returns the sum, and
 entropy is likewise summed over the four steps.
 
-### 5.5 One scale caveat before comparing against §2
+### 5.6 One scale caveat before comparing against §2
 
 A per-gate log-prob here is a sum of **four** categorical terms where §2's is
 **one**. The clip range $[0.8,\ 1.28]$ is scale-sensitive, so a pointer run and
@@ -904,7 +1063,7 @@ a pool run are not automatically on the same footing — the same lesson as the
 ELBO → trajectory switch in §1.3. Watch `trainer/loss` and the ratio spread when
 reading `n2_pointer` against `n2_pool_matched`.
 
-### 5.6 Per-epoch cost
+### 5.7 Per-epoch cost
 
 | | forwards |
 |---|---|
