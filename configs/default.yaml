@@ -67,8 +67,11 @@ defaults:
   # Multi-molecule training (Phase 2+). Null = single-molecule (uses `molecule`
   # above). Set e.g. molecule_set=n2_bond_scan to train across a molecule set.
   # Must precede `experiment` so an experiment can `override /molecule_set`.
-  - optional molecule_set: null
+  # Not `optional`: Hydra silently skips a missing optional config even when it
+  # is named on the command line, so a typo or an unpulled experiment ran the
+  # defaults instead of failing (job 234043). `null` alone already means "none".
+  - molecule_set: null
   - _self_
-  - optional experiment: null
+  - experiment: null
 
 vocab_size: 0 # Dummy, will be overwritten in factory.py
