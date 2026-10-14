@@ -20,9 +20,7 @@ from gqe_qsci.gqe.models.operator_scorer import OperatorScorer
 from gqe_qsci.gqe.models.policy import Policy
 
 
-class SmallConfig(GPT2Config):
-    def __init__(self, **kwargs):
-        super().__init__(n_layer=6, n_head=6, **kwargs)
+
 
 
 class _FeatureWTE(torch.nn.Module):
@@ -64,22 +62,32 @@ class _ScorerHead(torch.nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return self.scorer(hidden_states)
 
+# Overrides on top of GPT2Config's defaults (n_embd=768, n_layer=12, n_head=12).
+_SIZES = {
+    "default": {},
+    "small": dict(n_layer=6, n_head=6),
+    "matched": dict(n_embd=96, n_layer=4, n_head=4),
+}
 
 class GPT2Model(GPT2LMHeadModel, Policy):
     # CLAUDE
     def __init__(
         self,
-        small,
+        size,
         repetition_penalty,
         vocab_size,
         ngates,
         feature_scorer: bool = False,
         operator_features=None,
     ):
+
+        if size not in _SIZES:
+            raise ValueError(f"size must be one of {list(_SIZES)}, got {size!r}.")
         max_positions = int(ngates) + 1
-        gpt2cfg = GPT2Config(vocab_size=vocab_size, n_positions=max_positions)
-        if small:
-            gpt2cfg = SmallConfig(vocab_size=vocab_size, n_positions=max_positions)
+        gpt2cfg = GPT2Config(
+            vocab_size=vocab_size, n_positions=max_positions, **_SIZES[size]
+        )
+        
         if feature_scorer:
             # HF's tie_weights() would try `lm_head.weight = wte.weight`; our
             # replacements have no .weight. We tie by sharing the scorer instead.

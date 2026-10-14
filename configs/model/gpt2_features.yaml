@@ -10,6 +10,6 @@
 #
 # repetition_penalty still operates on token indices and is unaffected.
 _target_: gqe_qsci.gqe.models.gpt2.GPT2Model
-small: true
+size: small
 repetition_penalty: 1.2
 feature_scorer: true
