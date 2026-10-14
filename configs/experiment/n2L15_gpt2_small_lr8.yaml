@@ -1,0 +1,54 @@
+# @package _global_
+# ARCHITECTURE COMPARISON WITH ROOM IN THE SUBSPACE: N2 at 2.5 A (3,136 determinants), L=15.
+# Model: GPT-2, autoregressive (the original GQE architecture).
+#
+# The H10 comparison (archL15_*) could not rank the policies: its 5% cap sat far
+# below what chemical accuracy needs, so every model hit the same truncation
+# floor. Here the cap is 2x the subspace-requirement scan's number (102
+# determinants for chemical accuracy -> qsci.max_dim 204), and the requirement
+# is small enough for an L=15 circuit to reach. So the remaining error measures
+# which determinants the policy selects.
+#
+# LEARNING-RATE TEST for the parameter-matched GPT-2: is gpt2-small behind the
+# 43M GPT-2 because it is too small, or because it learns too slowly? Adam moves
+# each weight by ~lr per step, so the per-step change of the logits grows with
+# the layer width. 768/96 = 8, so lr x 8 (5e-6 -> 4e-5) gives the 96-wide model
+# roughly the per-step policy change of the 768-wide one. Everything else is
+# identical to n2L15_gpt2_small.
+# If this catches up with n2L15-gpt2, the gap was learning speed, not capacity.
+#
+# Run locally (laptop): hpc/run_local.sh, see its header.
+defaults:
+  - override /molecule: n2
+  - override /model: gpt2_features
+
+model:
+  size: matched
+
+exp_tag: n2L15-gpt2-small-lr8-s${trainer.seed}
+ngates: 15
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: arch-comparison-L15-room
+  tags: ["arch-comparison", "L15", "room-in-subspace", "n2", "gpt2", "param-matched", "lr-test"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  optimizer:
+    lr: 4.0e-5
+  load_checkpoint: false
+  checkpoint_every_n_iters: 50
+  precision: 32-true
+sampler:
+  shots: 10_000
+qsci:
+  coverage: null
+  max_dim: 204

@@ -11,27 +11,27 @@ import torch.nn as nn
 #   At each step the policy describes the partial circuit as a vector (query),
 #   and forward() rates every operator on the menu against that description.
 #
-# The three pieces
+# three pieces
 #   query   "what the circuit needs next". The model's summary of the partial
 #           circuit as H numbers. Not human-readable; its meaning is learned.
 #             DAG GNN : mean of the frontier-node embeddings (latest node on each
-#                       qubit) after the GAT layers -> one vector per circuit (B, H)
+#                       qubit) after the GAT layers -> one vector per circuit, overall (B, H)
 #             GPT-2 / diffusion : one hidden state per position          (B, L, H)
 #   keys    "what each operator offers". Each operator's 11 physical features
 #           (FEATURE_NAMES in operator_pool.py), z-scored per column, then
 #           passed through op_encoder (Linear -> GELU -> Linear)          (V, H)
 #   forward query @ keys.T * 1/sqrt(H): one score per operator    (B, V) / (B, L, V)
 #
-# Letters
+# Vocab
 #   B batch (circuits in parallel)  H hidden size (model setting)
 #   L circuit length (positions)    V number of operators in the pool (menu)
 #   Real run (archL15_dag_gnn, H10): B=10, H=128, L=15, V=546, 20 qubits.
 #   No weight has V in its shape, so the same weights can score any menu size,
 #   which is why a different molecule's menu can be plugged in.
 #
-# Sign convention (easy to get wrong)
-#   Every model samples from softmax(-inv_temperature * score). A LOW score
-#   means LIKELY. A high query.key means "avoid this operator".
+# Sign convention (CLAUDE)
+#   Every model samples from softmax(-inv_temperature * score): a LOW score
+#   means LIKELY. dag_gnn._scaled_logits relies on this (mask after the minus).
 #
 # How the DAG GNN uses it (dag_gnn.py, sample_sequence)
 #   node_tokens (B, n_qubits+L) -> embeddings (B, nodes, H) -> 6 GAT layers
@@ -41,25 +41,7 @@ import torch.nn as nn
 #   is averaged BEFORE scoring, so "which qubits" survives only implicitly.
 #
 # Python / PyTorch details
-#   scorer(query)   nn.Module.__call__ runs any hooks, then self.forward(query).
-#                   The torch frames in between are hidden by the debugger's
-#                   "Just My Code" (set "justMyCode": false to see them).
-#   hooks           functions attached with register_forward_hook etc. that run
-#                   on every call. This repo registers none.
-#   keys=...        pass precomputed keys when the same forward pass also uses
-#                   them as the INPUT embedding (weight tying, gnn.py /
-#                   diffusion.py), so the menu is encoded once, not twice.
-#   .detach()       same tensor without the autograd graph; .numpy() requires it
-#                   for tensors that require grad. Shares memory (no copy).
-#
-# Normalization
-#   z = (x - column mean over operators) / column std. A raw 0 does not stay 0.
-#   With only 2 operators (H2) every varying column becomes exactly +-0.707
-#   (= 1/sqrt(2), whatever the values); constant columns become 0.
-#   In training, train_pipeline.py overrides the stats via set_normalization()
-#   over ALL training molecules; set_molecule() then calls
-#   set_features(..., update_stats=False) so the scale stays fixed.
-#   (Minor: torch.std here uses n-1, np.std in train_pipeline uses n.)
+#   scorer(query)   is the same as self.forward(query)
 #
 # Identical feature rows -> identical keys -> identical scores. Expected for
 # the commuting Pauli fragments of one excitation (only_use_first_pauli=false).
@@ -73,18 +55,16 @@ class OperatorScorer(nn.Module):
         keys        = op_encoder(normalize(features))     # (V, H)
         logits[b,k] = query[b] @ keys[k] / sqrt(H)
 
-    Instead of one free weight column per operator (an integer-ID lookup that is
-    meaningless on any other molecule), each operator is scored from its physical
+    Instead of one free weight column per operator, each operator is scored from its physical
     feature vector (see OperatorPool.get_operator_features and NOTES.md,
     "Cross-molecule generalization"). The encoder weights are shared across
     operators, so the head:
 
       - works for any number of operators V (the menu is an input, not a size),
       - transfers across molecules whose operators live in the same feature space,
-      - structurally CANNOT distinguish operators with identical feature rows —
-        they receive identical logits. Intended: rows only collide for
+      - identical feature rows receive identical logits. Intended: rows only collide for
         symmetry-equivalent excitations (degenerate orbitals) or commuting
-        fragments of one generator, where equal probability is correct.
+        fragments of one generator.
 
     Shapes: ``forward`` broadcasts, so it serves both the DAG GNN's pooled query
     ``(B, H) -> (B, V)`` and the per-position hidden states of the diffusion /
@@ -98,9 +78,7 @@ class OperatorScorer(nn.Module):
 
     Normalization
     -------------
-    Feature columns have wildly different scales (gate_cost ~ 20, amplitude ~ 0.1,
-    binary arity), so each column is z-scored; raw columns would let the largest
-    scale dominate the encoder.
+    Feature columns have different scales, so each column is z-scored;
 
     ``update_stats`` controls whether ``set_features`` recomputes the mean/std.
 
@@ -111,11 +89,11 @@ class OperatorScorer(nn.Module):
         pass ``update_stats=False`` on every swap so the normalization is a fixed
         physical scale. See NOTES.md, "Normalization across molecules".
 
-    The 1/sqrt(H) scale keeps logit variance comparable to the Linear head at
-    initialization, so temperature schedules tuned for the baseline carry over.
+    The 1/sqrt(H) scale keeps logit variance comparable to the Linear head from earlier version
+    at initialization, so temperature scheduling tuned for the baseline can carry over.
+
     """
 
-    # CLAUDE
     def __init__(self, operator_features, hidden_size: int):
         super().__init__()
         feats = self._as_tensor(operator_features)
@@ -137,12 +115,11 @@ class OperatorScorer(nn.Module):
         self.register_buffer("feat_std", torch.ones(1, self.feat_dim))
         self.set_features(feats, update_stats=True)
 
-    # CLAUDE
     @staticmethod
     def _as_tensor(x) -> torch.Tensor:
         return torch.as_tensor(numpy.asarray(x), dtype=torch.float32)
 
-    # CLAUDE
+
     def set_features(self, operator_features, update_stats: bool = True) -> None:
         """
         Install a new operator menu.
@@ -165,7 +142,7 @@ class OperatorScorer(nn.Module):
             # clamp guards constant columns (std=0): they normalize to 0 everywhere
             self.feat_std.copy_(feats.std(dim=0, keepdim=True).clamp_min(1e-6))
 
-    # CLAUDE
+
     def set_normalization(self, mean, std) -> None:
         """
         Install fixed feature-normalization statistics (Phase 2 step 5).
@@ -180,12 +157,12 @@ class OperatorScorer(nn.Module):
         self.feat_mean.copy_(mean_t)
         self.feat_std.copy_(std_t)
 
-    # CLAUDE
+
     @property
     def vocab_size(self) -> int:
         return self.features.shape[0]
 
-    # CLAUDE
+
     def keys(self) -> torch.Tensor:
         """
         (V, H) encoded operator keys.
@@ -197,9 +174,10 @@ class OperatorScorer(nn.Module):
         normalized = (self.features - self.feat_mean) / self.feat_std
         return self.op_encoder(normalized)
 
-    # CLAUDE
+  
     def forward(self, query: torch.Tensor, keys: torch.Tensor | None = None) -> torch.Tensor:
         """
+        Score every operator in the menu against the query.
         query : (B, H) or (B, L, H)
         keys  : optional precomputed keys() — pass it when the caller already
                 needed the table for input embedding, to avoid encoding twice.

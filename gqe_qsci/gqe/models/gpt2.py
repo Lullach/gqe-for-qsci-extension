@@ -67,6 +67,7 @@ _SIZES = {
     "default": {},
     "small": dict(n_layer=6, n_head=6),
     "matched": dict(n_embd=96, n_layer=4, n_head=4),
+    "wide1": dict(n_layer=1, n_head=6),# n_embd stays 768; heads as in "small"
 }
 
 class GPT2Model(GPT2LMHeadModel, Policy):

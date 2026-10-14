@@ -854,6 +854,44 @@ Toy molecule: 6 spin-orbitals, interleaved Jordan–Wigner (even = $\alpha$),
 occupied $\{0, 1\}$, virtual $\{2,3,4,5\}$. That admits 4 singles and 4 doubles
 — small enough to check the masks by hand.
 
+The indices 0–5 are **spin-orbitals**: 3 spatial orbitals, each with an
+$\alpha$ and a $\beta$ slot. "Interleaved" means the two slots of one spatial
+orbital are neighbours, so spin-orbital $2p$ is spatial orbital $p$ with spin
+$\alpha$ and $2p+1$ is the same orbital with spin $\beta$. Under Jordan–Wigner
+each spin-orbital is one qubit.
+
+| spatial orbital | $\alpha$ | $\beta$ | in the reference |
+|---|---|---|---|
+| 0 | 0 | 1 | occupied (lowest energy) |
+| 1 | 2 | 3 | virtual |
+| 2 | 4 | 5 | virtual |
+
+**Virtual** means unoccupied *in the Hartree–Fock reference*. A virtual orbital
+is a place an excitation can move an electron to, not one that stays empty
+forever. The reference puts the 2 electrons in the lowest spatial orbital, one
+of each spin:
+
+```
+qubit:  0 1 2 3 4 5
+HF:     1 1 0 0 0 0     (1 = electron present)
+```
+
+An excitation moves electrons from occupied to virtual spin-orbitals, and must
+conserve spin ($\alpha \to \alpha$, $\beta \to \beta$):
+
+- **Singles** move one electron. The $\alpha$ electron in 0 can go to 2 or 4,
+  and the $\beta$ electron in 1 can go to 3 or 5. That gives
+  $0{\to}2,\ 0{\to}4,\ 1{\to}3,\ 1{\to}5$. For example, $0{\to}2$ turns
+  `110000` into `011000`.
+- **Doubles** move both electrons at once. There is exactly one electron of
+  each spin, so the $\alpha$ electron goes to 2 or 4 and the $\beta$ electron
+  goes to 3 or 5: $2 \times 2 = 4$ doubles. Written with sorted targets (as the
+  pointers below spell them), they are $(0,1){\to}(2,3)$, $(0,1){\to}(2,5)$,
+  $(0,1){\to}(3,4)$, $(0,1){\to}(4,5)$. In $(0,1){\to}(3,4)$ the $\alpha$
+  electron goes to 4 and the $\beta$ electron to 3; this is the gate traced
+  in §5.1. No same-spin doubles exist, since a double within one spin would
+  need two occupied orbitals of that spin.
+
 ### 5.1 One gate = four pointers
 
 $$i\ (\text{occ}) \longrightarrow j\ (\text{occ},\, j > i)\ \text{or STOP} \longrightarrow a\ (\text{virt}) \longrightarrow b\ (\text{virt},\, b > a)\ \text{or NONE}$$
@@ -966,6 +1004,77 @@ orbitals, so the first-order singles amplitude vanishes and MP2 has no singles
 correction at all. A zero angle makes the gate the identity, wasting a circuit
 slot, so `mp2_angle()` returns `single_angle` instead. That number is not
 physics.
+
+**The equations behind that paragraph.**
+
+*The gate.* The sampler applies every gate with CUDA-Q's `exp_pauli`
+([sampler.py](../gqe_qsci/gqe/sampler.py)). Under `only_use_first_pauli: true`
+a gate is one Pauli string $P$ (a tensor product of $I, X, Y, Z$) multiplied by
+the angle $\theta$:
+
+$$U(\theta) = e^{i\theta P} = \cos\theta\,\mathbb{1} + i\sin\theta\,P .$$
+
+The second form holds because $P^2 = \mathbb{1}$ for every Pauli string. The
+$X$/$Y$ factors of $P$ flip exactly the qubits the excitation touches, and the
+$Z$ factors only add a sign. So $P$ maps the reference determinant onto the
+excited one, up to a phase: $P\lvert\Phi_0\rangle = e^{i\phi}\lvert\Phi_{\text{exc}}\rangle$.
+Acting on the reference,
+
+$$U(\theta)\lvert\Phi_0\rangle = \cos\theta\,\lvert\Phi_0\rangle + i e^{i\phi}\sin\theta\,\lvert\Phi_{\text{exc}}\rangle ,$$
+
+so a measurement returns the excited determinant with probability
+$\sin^2\theta$. For the toy single $0{\to}2$, the Jordan–Wigner form of the
+full generator is
+
+$$a_2^\dagger a_0 - a_0^\dagger a_2 = \tfrac{i}{2}\left(Y_0 Z_1 X_2 - X_0 Z_1 Y_2\right),$$
+
+and the gate keeps one of these two strings. Both map `110000` to `011000`.
+
+*The angle for a double.* This is the first-order (MP2) amplitude:
+
+$$t_{ij}^{ab} = \frac{\langle ij \Vert ab \rangle}{\varepsilon_i + \varepsilon_j - \varepsilon_a - \varepsilon_b},
+\qquad \theta = 2\,t_{ij}^{ab}.$$
+
+Here $\varepsilon_p$ are the HF orbital energies. The antisymmetrized integral
+is built from chemists'-notation integrals $(pq \vert rs)$:
+
+$$\langle ij \Vert ab \rangle =
+\begin{cases}
+(ia \vert jb) & \text{opposite spin} \\
+(ia \vert jb) - (ib \vert ja) & \text{same spin}
+\end{cases}$$
+
+The numerator is exactly $\langle \Phi_{ij}^{ab} \vert H \vert \Phi_0 \rangle$,
+the coupling between the reference and the doubly excited determinant.
+
+*The angle for a single, and why it is zero.* The same first-order formula for
+a single is
+
+$$t_i^a = \frac{\langle \Phi_i^a \vert H \vert \Phi_0 \rangle}{\varepsilon_i - \varepsilon_a},
+\qquad
+\langle \Phi_i^a \vert H \vert \Phi_0 \rangle = h_{ia} + \sum_{j \in \text{occ}} \langle ij \Vert aj \rangle = f_{ia} ,$$
+
+where the middle expression follows from the Slater–Condon rules and $f$ is the
+Fock matrix. Solving the HF equations is the same as making the occupied–virtual
+block of $f$ vanish. Canonical HF orbitals go further and make $f$ fully
+diagonal, $f_{pq} = \varepsilon_p\,\delta_{pq}$. So $f_{ia} = 0$ for every
+occupied $i$ and virtual $a$, and therefore $t_i^a = 0$. That is Brillouin's
+theorem.
+
+The intuition: $e^{\kappa(a_a^\dagger a_i - a_i^\dagger a_a)}$ is just a
+rotation that mixes orbital $i$ with orbital $a$. HF has already chosen the
+orbitals that minimize the energy, so the slope of the energy with respect to
+any such rotation is zero at $\kappa = 0$:
+$\partial E / \partial \kappa = 2\langle \Phi_0 \vert H \vert \Phi_i^a \rangle = 0$.
+This holds only for singles acting directly on the reference. Once doubles
+have been applied, the state is no longer $\Phi_0$ and singles do couple
+(second order), which is why they are kept at all.
+
+*Why a zero angle is the identity.* Put $\theta = 0$ into the gate:
+$U(0) = \cos 0\,\mathbb{1} + i\sin 0\,P = \mathbb{1}$. The gate does nothing,
+and the excited determinant appears with probability $\sin^2 0 = 0$. With the
+fallback $\theta = 0.1$, a single acting on the reference sends
+$\sin^2(0.1) \approx 1\%$ of the shots to the excited determinant.
 
 **What the angle actually controls here.** QSCI keeps only the *determinants* a
 circuit samples; the amplitudes are thrown away and the eigenvector comes from
