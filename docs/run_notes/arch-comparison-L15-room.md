@@ -125,10 +125,58 @@ Two candidate explanations, not tested yet:
   gate-gate correlations at any size); the absorbing model's trajectory log-prob
   follows one random unmasking order (noisier).
 
-Tests prepared, to run locally with `hpc/run_local.sh` (results not in yet):
+Tested 2026-10-14 (local runs, `hpc/run_local.sh`, 5 seeds each):
 `{n2,lif}L15_gpt2_small_lr8` (gpt2-small at lr 4e-5 = 8x) and
-`{n2,lif}L15_gpt2_wide1` (768 wide, 1 layer, 7.7M; needs the `wide1` preset in
-`gqe_qsci/gqe/models/gpt2.py`).
+`{n2,lif}L15_gpt2_wide1` (768 wide, 1 layer, 6 heads, 7.7M, usual lr).
+
+| family | params | lr | N2 GQE-opt | N2 refined | N2 best circuit | LiF GQE-opt | LiF refined |
+|---|---|---|---|---|---|---|---|
+| gpt2 | 43.1M | 5e-6 | 3.75 +/- 0.74 | 0.31 +/- 0.05 | 2.70 | 6.29 +/- 0.75 | 0.43 +/- 0.01 |
+| gpt2-small | 460K | 5e-6 | 5.10 +/- 0.67 | 0.34 +/- 0.03 | 3.94 | 7.21 +/- 1.56 | 0.41 +/- 0.01 |
+| gpt2-small-lr8 | 460K | 4e-5 | 3.83 +/- 1.03 | 0.21 +/- 0.04 | 2.26 | 6.70 +/- 0.71 | 0.41 +/- 0.01 |
+| gpt2-wide1 | 7.7M | 5e-6 | 3.40 +/- 0.95 | 0.20 +/- 0.02 | 1.79 | 5.61 +/- 0.96 | 0.42 +/- 0.02 |
+
+**The width x learning-rate explanation holds.** 8x the lr closes the gap on N2
+(5.10 -> 3.83, level with the 43M model) and part of it on LiF. One 768-wide
+layer is at least as good as six (nominally the best GPT-2 on both molecules),
+so depth and parameter count are not what helped. Differences among gpt2,
+lr8 and wide1 are within the seed noise (std ~1 mHa, 5 seeds); all three beat
+gpt2-small.
+
+**Consequence:** every comparison so far ran all models at the same lr 5e-6,
+which gives wider models a larger effective step. The architecture ranking at
+a shared lr is confounded with width; a fair comparison needs a per-model lr
+(or an lr scaled with width).
+
+### Learning-rate sweep (N2, 2026-10-15, local runs)
+
+Configs `configs/experiment/n2L15_lrsweep_*.yaml`, lr passed as
+`EXTRA="trainer.optimizer.lr=..."`; folders `n2L15-<model>-lr<lr>-s<seed>` (1e-4
+is written `lr0.0001`). The `lr0.0001` folders of gpt2-small (s1-5) and
+diff-absorb-small (s1-3) contain an interrupted run followed by the complete one;
+use only the last run in each file (epoch counter resets to 0).
+
+GQE-optimized, mHa, mean +/- std over 5 seeds (5e-6 = the original runs;
+gpt2-small at 4e-5 = the lr8 runs):
+
+| model | 5e-6 | 2e-5 | 4e-5 | 1e-4 |
+|---|---|---|---|---|
+| gpt2-small | 5.10 +/- 0.67 | **3.45 +/- 0.23** | 3.83 +/- 1.03 | 3.70 +/- 0.45 |
+| diff-absorb-small | 5.38 +/- 0.43 | 4.71 +/- 0.39 | **3.54 +/- 0.45** | 4.02 +/- 0.41 |
+| diff-1shot-small | 5.44 +/- 0.43 | 3.71 +/- 0.67 | 3.91 +/- 0.98 | **3.65 +/- 1.17** |
+| diff-gnn | 5.19 +/- 0.59 | 3.79 +/- 1.06 | **2.81 +/- 0.60** | 4.91 +/- 1.29 |
+| dag-gnn | 5.88 +/- 0.31 | **4.64 +/- 0.50** | 5.26 +/- 0.89 | 5.12 +/- 1.06 |
+
+Global-refined at the best lr: 0.17-0.32 for all (uninformative, as before).
+Best single circuits: diff-gnn 2.14, diff-1shot-small 2.18, gpt2-small 2.26 mHa.
+At 1e-4 the GNNs become unstable (mean sampled error at the end: dag-gnn 175 mHa,
+diff-gnn 28.6; refined dag-gnn 1.40 +/- 1.14).
+
+- 5e-6 was too low for every model; every earlier comparison ran there.
+- At each model's best lr, all but dag-gnn beat the 43M GPT-2 at 5e-6 (3.75).
+- Ranking at the best lr: diff-gnn < gpt2-small ~ diff-absorb-small ~ diff-1shot-small < dag-gnn.
+  The best lr was picked from the same 5 seeds it is scored on, so the best
+  values are biased low; confirm on fresh seeds before ranking.
 
 ## Pointer diagnosis
 

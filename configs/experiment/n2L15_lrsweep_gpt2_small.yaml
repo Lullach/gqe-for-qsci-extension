@@ -1,0 +1,51 @@
+# @package _global_
+# ARCHITECTURE COMPARISON WITH ROOM IN THE SUBSPACE: N2 at 2.5 A (3,136 determinants), L=15.
+# Model: GPT-2, autoregressive (the original GQE architecture).
+#
+# The H10 comparison (archL15_*) could not rank the policies: its 5% cap sat far
+# below what chemical accuracy needs, so every model hit the same truncation
+# floor. Here the cap is 2x the subspace-requirement scan's number (102
+# determinants for chemical accuracy -> qsci.max_dim 204), and the requirement
+# is small enough for an L=15 circuit to reach. So the remaining error measures
+# which determinants the policy selects.
+#
+# LEARNING-RATE SWEEP (N2), model as in n2L15_gpt2_small. The GPT-2 tests showed that
+# at the shared lr 5e-6 a wider model effectively takes larger steps (lr x 8 on
+# the 96-wide GPT-2 matched the 768-wide 43M one), so the architecture ranking
+# at one lr is confounded with width. This config sets nothing new except the
+# exp_tag, which carries the lr; the lr itself comes from the command line:
+#     EXTRA="trainer.optimizer.lr=2e-5" hpc/run_local.sh "n2L15_lrsweep_gpt2_small" 1-5
+# -> outputs/gqe-for-qsci/n2L15-gpt2-small-lr2e-05-s<seed>. lr 5e-6 is the existing
+# n2L15-gpt2-small-s* runs (and 4e-5 for gpt2-small is n2L15-gpt2-small-lr8-s*).
+defaults:
+  - override /molecule: n2
+  - override /model: gpt2_features
+
+model:
+  size: matched
+
+exp_tag: n2L15-gpt2-small-lr${trainer.optimizer.lr}-s${trainer.seed}
+ngates: 15
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: arch-comparison-L15-room
+  tags: ["arch-comparison", "L15", "room-in-subspace", "n2", "gpt2", "param-matched", "lr-sweep"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 50
+  precision: 32-true
+sampler:
+  shots: 10_000
+qsci:
+  coverage: null
+  max_dim: 204

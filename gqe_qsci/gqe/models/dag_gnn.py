@@ -100,7 +100,7 @@ class CircuitDAGGNNPolicy(Policy):
     Use config  model=dag_gnn  to select this variant.
     """
 
-    # CLAUDE
+
     def __init__(
         self,
         vocab_size: int,
@@ -147,8 +147,7 @@ class CircuitDAGGNNPolicy(Policy):
             # Feature mode: the node table is *composed* each forward pass from
             # physical features rather than looked up by index.
             #   qubit nodes → qubit_encoder(orbital features)  (transfers across
-            #                 molecules; a per-index embedding would not — "qubit
-            #                 5" is different physics in every molecule)
+            #                 molecules)
             #   gate nodes  → the scorer's keys (weight-tied to the output head)
             #   UNPLACED    → its own learned vector (no physical features)
             if orbital_features is None:
@@ -249,7 +248,7 @@ class CircuitDAGGNNPolicy(Policy):
     # Internal helpers
     # -------------------------------------------------------------------------
 
-    # CLAUDE
+
     def _node_table(self) -> torch.Tensor:
         """
         (n_qubits + V + 1, H) embedding table for node tokens.
@@ -312,7 +311,10 @@ class CircuitDAGGNNPolicy(Policy):
             )
         return torch.cat(parts, dim=1)
 
-    # CLAUDE
+
+
+
+
     def _step_forward(
         self,
         node_tokens: torch.Tensor,   # (B, num_nodes) long — None if node_embs given
@@ -323,8 +325,10 @@ class CircuitDAGGNNPolicy(Policy):
         node_embs: torch.Tensor | None = None,   # (B, num_nodes, H)
     ) -> torch.Tensor:
         """
+        Simple version in explore_dag_gnn2.py
         One GNN forward pass over the current partial DAG.
         Returns mean-pooled frontier embeddings: (B, H).
+        Those are used as a query to then score the next operator.
 
         node_embs lets the caller supply node embeddings directly instead of
         having them looked up from node_tokens. The pool-based policy leaves it
@@ -381,7 +385,7 @@ class CircuitDAGGNNPolicy(Policy):
         frontier_h = h_3d.gather(1, idx)                           # (B, n_qubits, H)
         return frontier_h.mean(dim=1)                              # (B, H)
 
-    # CLAUDE
+
     def _advance_dag(
         self,
         ops: torch.Tensor,           # (B,) long — operator index placed at this step
@@ -543,7 +547,8 @@ class CircuitDAGGNNPolicy(Policy):
 
         Re-runs the L-step DAG construction with the stored operator sequence,
         computing the conditional log-probability at each step.  Fully
-        deterministic — same sequence always yields the same value.
+        deterministic if in eval mode.
+        In training mode dropout turns off some connections randomly.
 
         This is already a trajectory log-probability: the gate sequence IS the
         trajectory, so nothing extra needs recording and reveal_step is

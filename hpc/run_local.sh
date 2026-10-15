@@ -14,6 +14,10 @@
 # EXTRA="..." adds Hydra overrides to every run, e.g. EXTRA="trainer.max_iters=1"
 # for a smoke test.
 #
+# torch_geometric (needed by the GNN policies) is not in the local image, unlike
+# the cluster's: each container installs it if missing, from a pip cache kept
+# in the Docker volume gqe_pip_cache, so only the first run downloads it.
+#
 # Same layout as on ABCI-Q: results in outputs/gqe-for-qsci/<exp_tag>/, one log
 # per run in logs/local_<timestamp>/, and a final ok/FAILED list. W&B is offline.
 
@@ -33,12 +37,12 @@ echo "logs: $LOGDIR"
 
 run() {   # $1 experiment, $2 seed
     MSYS_NO_PATHCONV=1 docker run --rm --entrypoint /bin/bash \
-        -v "$REPO:/workspace" -w /workspace \
+        -v "$REPO:/workspace" -v gqe_pip_cache:/root/.cache/pip -w /workspace \
         -e PYTHONPATH=/workspace:/workspace/hpc -e PYTHONUNBUFFERED=1 \
         -e OMP_NUM_THREADS=1 -e WANDB_MODE=offline -e HYDRA_FULL_ERROR=1 \
         -e OMPI_MCA_pml=ob1 -e OMPI_MCA_btl=self,tcp \
         -e OMPI_MCA_opal_warn_on_missing_libcuda=0 \
-        gqe_qsci_cpu -c "python3 hpc/train_fast_sampler.py experiment=$1 trainer.seed=$2 ${EXTRA:-}" \
+        gqe_qsci_cpu -c "python3 -c 'import torch_geometric' 2>/dev/null || pip install -q torch_geometric; python3 hpc/train_fast_sampler.py experiment=$1 trainer.seed=$2 ${EXTRA:-}" \
         > "$LOGDIR/$1-s$2.log" 2>&1
 }
 

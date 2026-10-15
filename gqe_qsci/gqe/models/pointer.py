@@ -125,11 +125,18 @@ class ExcitationRules:
     Sz propagates BACKWARD into step 3: `a` is only offered when a partner `b`
     of the required spin still exists above it, so step 4 can never be empty.
 
-    All arrays are O(n) or O(2n); nothing here enumerates excitations.
+    Angle screening (`live`, optional) propagates backward the same way: a
+    candidate is offered only when SOME completion of it rotates by at least
+    theta_min, so again no step can be handed an empty mask. Without it most of
+    the action space is identity gates — see OperatorPool.live_double_mask.
+
+    All arrays are O(n) or O(2n) except `live`, which is the O(n^4) screening
+    table; nothing here enumerates excitations at decode time.
     """
 
     # CLAUDE
-    def __init__(self, orbital_features, device=None, allow_singles: bool = True):
+    def __init__(self, orbital_features, device=None, allow_singles: bool = True,
+                 live=None):
         self.allow_singles = bool(allow_singles)
         orb = torch.as_tensor(numpy.asarray(orbital_features), dtype=torch.float32)
         if device is not None:
@@ -159,9 +166,34 @@ class ExcitationRules:
             dtype=torch.bool, device=self.device,
         )
 
+        # Angle screening. live[i, j, a, b] = this double is worth placing;
+        # the three partial tables are its backward closures, so step s only
+        # offers candidates that still have a live completion.
+        self.screened = live is not None
+        if live is None:
+            self.live = None
+            self.live_ij = self.live_i = None
+        else:
+            self.live = torch.as_tensor(
+                numpy.asarray(live), dtype=torch.bool, device=self.device
+            )
+            if self.live.shape != (self.n,) * 4:
+                raise ValueError(
+                    f"live must be ({self.n},)*4, got {tuple(self.live.shape)}"
+                )
+            if not bool(self.live.any()):
+                raise ValueError(
+                    "angle screening removed every double excitation; lower "
+                    "theta_min (nothing would be sampleable)."
+                )
+            self.live_ij = self.live.any(-1)          # (n, n, n)  over b -> a
+            self.live_i = self.live_ij.any(-1)        # (n, n)     over a -> j
+            self.live_any = self.live_i.any(-1)       # (n,)       over j -> i
+
     # Tensor attributes, listed once so to() cannot silently miss one.
     _TENSORS = ("occ", "spin", "virt", "idx", "n_virt_spin",
-                "has_virt_after", "has_occ_after", "double_ok")
+                "has_virt_after", "has_occ_after", "double_ok",
+                "live", "live_ij", "live_i", "live_any")
 
     # CLAUDE
     def to(self, device):
@@ -183,7 +215,9 @@ class ExcitationRules:
         if self.device == device:
             return self
         for name in self._TENSORS:
-            setattr(self, name, getattr(self, name).to(device))
+            t = getattr(self, name, None)
+            if t is not None:                  # the screening tables are optional
+                setattr(self, name, t.to(device))
         self.device = device
         return self
 
@@ -212,6 +246,8 @@ class ExcitationRules:
                 (self.double_ok[self.spin + 0] & self.has_occ_after[0])
                 | (self.double_ok[self.spin + 1] & self.has_occ_after[1])
             )
+            if self.screened:
+                double = double & self.live_any       # (n,) some live (j, a, b)
             ok = (self.occ & (single | double)).unsqueeze(0).expand(batch, -1)
             return torch.cat([ok, false_col], dim=-1)
 
@@ -223,6 +259,8 @@ class ExcitationRules:
                 & (self.idx.unsqueeze(0) > i.unsqueeze(1))
                 & self.double_ok[n_beta]
             )
+            if self.screened:
+                j_ok = j_ok & self.live_i[i]          # (B, n) some live (a, b)
             stop_ok = (self.n_virt_spin[self.spin[i]] > 0).unsqueeze(1)      # (B, 1)
             if not self.allow_singles:
                 stop_ok = torch.zeros_like(stop_ok)
@@ -244,6 +282,10 @@ class ExcitationRules:
             a_double = (
                 self.virt.unsqueeze(0) & (req >= 0) & (req <= 1) & partner_exists
             )
+            if self.screened:
+                # some live b for this (i, j, a); j == n (single) indexes a row
+                # that is all-False, hence the clamp and the torch.where below.
+                a_double = a_double & self.live_ij[i, j.clamp(max=n - 1)]
             a_ok = torch.where(is_single, a_single, a_double)
             return torch.cat([a_ok, false_col], dim=-1)
 
@@ -257,6 +299,8 @@ class ExcitationRules:
                 & (self.spin.unsqueeze(0) == req_b)
                 & ~is_single
             )
+            if self.screened:
+                b_ok = b_ok & self.live[i, j.clamp(max=n - 1), a]
             return torch.cat([b_ok, is_single], dim=-1)
 
         raise ValueError(f"step {s} out of range (expected 0..3)")
@@ -563,11 +607,16 @@ class PointerActionSpace(nn.Module):
         dropout: float = 0.0,
         single_angle: float = 0.1,
         allow_singles: bool = True,
+        theta_min: float = 0.0,
     ):
         super().__init__()
         self.hidden_size = int(hidden_size)
         self.single_angle = float(single_angle)
         self.allow_singles = bool(allow_singles)
+        # Angle screening threshold in radians; 0.0 keeps the unscreened action
+        # space (the behaviour of every pointer run before 2026-10. A gate below
+        # ~2/sqrt(shots) rad is never sampled — see live_double_mask.
+        self.theta_min = float(theta_min)
 
         orb, pair = build_orbital_inputs(pool)
         self.encoder = OrbitalEncoder(
@@ -586,8 +635,10 @@ class PointerActionSpace(nn.Module):
     def _attach(self, pool, orb):
         self.pool = pool
         self.n_orbitals = int(orb.shape[0])
+        live = pool.live_double_mask(self.theta_min) if self.theta_min > 0 else None
         self.rules = ExcitationRules(orb, device=self.orb_feats.device,
-                                     allow_singles=self.allow_singles)
+                                     allow_singles=self.allow_singles,
+                                     live=live)
 
     # CLAUDE
     def set_molecule(self, bundle):

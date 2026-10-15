@@ -76,6 +76,12 @@ class PointerDAGGNNPolicy(Policy):
     allow_singles : bool
         Restrict the action space to doubles. Worth trying, since with an MP2
         angle a single is a somewhat arbitrary gate.
+    theta_min : float
+        Angle-screening threshold in radians. Doubles whose MP2 angle is
+        smaller are masked out of the action space entirely: they put
+        sin^2(theta/2) < 1e-4 on their excited determinant, so at 10k shots
+        they are identity gates that waste a circuit slot. 0.0 disables the
+        screening and reproduces every pointer run before 2026-10.
     """
 
     # CLAUDE
@@ -91,6 +97,7 @@ class PointerDAGGNNPolicy(Policy):
         encoder_heads: int = 4,
         single_angle: float = 0.1,
         allow_singles: bool = True,
+        theta_min: float = 0.0,
     ):
         _require_pyg()
         super().__init__()
@@ -102,7 +109,7 @@ class PointerDAGGNNPolicy(Policy):
             pool, hidden_size,
             encoder_layers=encoder_layers, encoder_heads=encoder_heads,
             dropout=dropout, single_angle=single_angle,
-            allow_singles=allow_singles,
+            allow_singles=allow_singles, theta_min=theta_min,
         )
 
         # Gate slots that have not been placed yet are isolated nodes with no

@@ -243,6 +243,84 @@ class UCCSDBasedPool(OperatorPool, ABC):
         return cached
 
     # CLAUDE
+    @staticmethod
+    def two_state_angle(V: float, d_en: float) -> float:
+        """
+        Rotation angle from the exact ground state of the 2x2 block
+
+            [[E_0, V], [V, E_Phi]],      d_en = E_0 - E_Phi
+
+        The circuit puts sin(theta/2) on the excited determinant, so theta is
+        twice the mixing angle of the lower eigenvector (c0, c1):
+
+            c1 / c0 = -[d_en + sqrt(d_en^2 + 4 V^2)] / (2 V)
+            theta   = 2 * atan2(c1, c0)
+
+        Limits, which is the whole point of using it instead of 2V/d_en:
+          |V| << |d_en|, E_Phi above E_0 : theta -> 2V/d_en  (agrees with PT)
+          d_en -> 0                      : theta -> +-pi/2   (equal mixture)
+          E_Phi below E_0                : theta -> +-pi     (transfer to Phi)
+
+        Beware the last one for QSCI: a near-pi rotation moves almost all
+        weight OFF the reference, which is right for a two-state ground state
+        and may be wrong for a sampler that needs many determinants.
+        """
+        if abs(V) < 1e-12:
+            return 0.0                      # no coupling, no transfer
+        # The eigenvector direction is (2V, -r) with r = d_en + sqrt(...) >= 0.
+        # r >= 0 ALWAYS, so for V < 0 that representative has c0 < 0 and the
+        # phase flips; multiplying by sign(V) picks the c0 >= 0 representative
+        # and keeps theta in (-pi, pi]. Verified against explicit
+        # diagonalisation in scratch/check_two_state_angle.py.
+        s = 1.0 if V > 0 else -1.0
+        r = d_en + numpy.sqrt(d_en * d_en + 4.0 * V * V)
+        return float(2.0 * numpy.arctan2(-s * r, abs(2.0 * V)))
+
+    # CLAUDE
+    def live_double_mask(self, theta_min: float) -> numpy.ndarray:
+        """
+        (n_so, n_so, n_so, n_so) bool: live[i, j, a, b] is True when the double
+        excitation (i, j) -> (a, b) rotates by at least `theta_min` radians.
+
+        Only canonically-spelled, Sz-conserving entries can be True (j > i,
+        b > a, i/j occupied, a/b virtual); everything else stays False.
+
+        WHY. A gate with angle theta puts probability sin^2(theta/2) on its
+        excited determinant, so at N shots anything below ~2/sqrt(N) radians is
+        never sampled and the gate is an identity in all but name. Measured over
+        the full pointer action space, the median |theta_MP2| is 0.0 and 62-86%
+        of doubles (81% for N2) fall below the 10k-shot threshold: most of the
+        action space does nothing. The pool policies never face this because
+        CCSD screening removed those excitations from their menu. See
+        docs/run_notes/arch-comparison-L15-room.md and
+        scratch/explore_pointer_action_space.py.
+
+        COST. O(n^4) angles, evaluated once per molecule through mp2_angle() so
+        the physics is exactly the per-gate angle the sampler will use. That is
+        285 entries for N2 and 328 for LiF; it is a Python loop, so a 30-orbital
+        active space (~190k quadruples) would want vectorising first.
+        """
+        orb = numpy.asarray(self.get_orbital_features())
+        n = orb.shape[0]
+        occ = [p for p in range(n) if orb[p, 1] > 0]
+        virt = [p for p in range(n) if orb[p, 1] == 0]
+        spin = orb[:, 2].astype(int)
+
+        live = numpy.zeros((n, n, n, n), dtype=bool)
+        if theta_min <= 0.0:
+            # No screening: every canonical Sz-conserving double stays live.
+            theta_min = -1.0
+        for x, i in enumerate(occ):
+            for j in occ[x + 1:]:
+                for y, a in enumerate(virt):
+                    for b in virt[y + 1:]:
+                        if spin[i] + spin[j] != spin[a] + spin[b]:
+                            continue
+                        if abs(self.mp2_angle([i, j], [a, b])) >= theta_min:
+                            live[i, j, a, b] = True
+        return live
+
+    # CLAUDE
     def mp2_angle(self, occ_sos, virt_sos, single_angle: float = 0.1) -> float:
         """
         Rotation angle for one excitation, without CCSD.
