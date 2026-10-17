@@ -26,7 +26,7 @@ import pyci
 from gqe_qsci.qsci.determinant import Determinant
 
 
-# CLAUDE
+
 def _ndet(wfn) -> int:
     """Number of determinants in a pyci wavefunction (API varies by version)."""
     try:
@@ -35,7 +35,7 @@ def _ndet(wfn) -> int:
         return int(wfn.ndet)
 
 
-# CLAUDE
+
 def build_pyci_hamiltonian(molecule):
     """pyci.hamiltonian for a molecule's active space — same recipe as
     QSCIPipeline.__init__ (h2 transposed to physicist ordering)."""
@@ -44,20 +44,20 @@ def build_pyci_hamiltonian(molecule):
     return pyci.hamiltonian(ham.e_core, ham.h1, h2)
 
 
-# CLAUDE
+
 def fci_dimension(norb, nelec):
     na, nb = nelec
     return math.comb(norb, na) * math.comb(norb, nb)
 
 
-# CLAUDE
+
 def hf_determinant(nelec):
     """Hartree-Fock reference: the lowest na (nb) orbitals occupied."""
     na, nb = nelec
     return Determinant([np.uint64((1 << na) - 1), np.uint64((1 << nb) - 1)])
 
 
-# CLAUDE
+
 def diagonalize(pyci_ham, determinants, nelec, max_cycle=1000):
     """Ground-state energy of the Hamiltonian projected onto `determinants`.
     Same path as QSCIPipeline.diagonalize (fullci_wfn + sparse_op.solve)."""
@@ -65,6 +65,7 @@ def diagonalize(pyci_ham, determinants, nelec, max_cycle=1000):
     for det in determinants:
         wfn.add_det(det)
     op = pyci.sparse_op(pyci_ham, wfn)
+    #maybe not throw _= coefficients away?
     energies, _ = op.solve(maxiter=max_cycle)
     return float(energies[0])
 
@@ -73,7 +74,7 @@ def diagonalize(pyci_ham, determinants, nelec, max_cycle=1000):
 # Random selection (the floor)
 # ---------------------------------------------------------------------------
 
-# CLAUDE
+
 def random_determinants(norb, nelec, n_det, rng):
     """
     n_det distinct number/spin-conserving determinants, HF always included.
@@ -82,7 +83,12 @@ def random_determinants(norb, nelec, n_det, rng):
     correctly without relying on pyscf address conventions.
     """
     na, nb = nelec
-    n_det = min(n_det, fci_dimension(norb, nelec))
+    #n_det = min(n_det, fci_dimension(norb, nelec))
+    max_pos_d = fci_dimension(norb, nelec)
+    if n_det > max_pos_d:
+        raise ValueError(f"subspace dimension {n_det} requested, but the CI space "
+                         f"only has {max_pos_d} determinants")
+        
     seen: set[tuple[int, int]] = set()
 
     def mask(orbs):
@@ -100,19 +106,22 @@ def random_determinants(norb, nelec, n_det, rng):
     return [Determinant([np.uint64(a), np.uint64(b)]) for a, b in seen]
 
 
-# CLAUDE
 def random_curve(pyci_ham, norb, nelec, dims, rng, n_seeds=3, max_cycle=1000):
     """
     (ndet, mean_energy, std_energy) for random selection at each size in `dims`,
     averaged over n_seeds independent draws.
     """
+    max_d, max_pos_d = int(np.max(dims)), fci_dimension(norb, nelec)
+    if max_d > max_pos_d:
+        raise ValueError(f"subspace dimension {max_d} requested, but the CI space "
+                         f"only has {max_pos_d} determinants")
     out = []
     for d in dims:
         energies = [
             diagonalize(pyci_ham, random_determinants(norb, nelec, d, rng), nelec, max_cycle)
             for _ in range(n_seeds)
         ]
-        out.append((min(d, fci_dimension(norb, nelec)), float(np.mean(energies)), float(np.std(energies))))
+        out.append((d, float(np.mean(energies)), float(np.std(energies))))
     return out
 
 
@@ -185,8 +194,8 @@ def _determinants_of(wfn):
     return dets
 
 
-# CLAUDE
-def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
+
+def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000, selfcheck=True):
     """
     (ndet, energy) for the BEST subspace of each size: take the exact FCI vector,
     sort determinants by |c|, keep the top n, re-diagonalize.
@@ -195,7 +204,7 @@ def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
     determinants are essentially |c|^2-distributed, so top-n by |c| is the
     best that sampling could ever converge to.
 
-    IT IS NOT A LOWER BOUND ON THE ACHIEVABLE ERROR. Top-n by |c| provably
+    IT IS NOT A LOWER BOUND ON THE ACHIEVABLE ENERGY ERROR. Top-n by |c|
     maximises OVERLAP with the exact state (it maximises the retained
     sum of |c_i|^2), but energy is a different objective: a subspace's
     variational energy is not a sum of per-determinant contributions, and
@@ -237,14 +246,13 @@ def oracle_curve(pyci_ham, nelec, dims, max_cycle=1000):
                 f"{check:.10f}, full CI is {fci_energy:.10f}; extraction is wrong.")
     order = np.argsort(-c)                 # most important determinant first
     curve = []
-    for n in dims:
-        n = min(int(n), len(dets))
+    for d in dims:
+        n = min(int(d), len(dets))
         subset = [dets[i] for i in order[:n]]
         curve.append((n, diagonalize(pyci_ham, subset, nelec, max_cycle)))
     return curve, fci_energy
 
 
-# CLAUDE
 def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000, selfcheck=True):
     """(determinants sorted by |c| descending, fci_energy). Shared setup."""
     wfn = pyci.fullci_wfn(pyci_ham.nbasis, *nelec)
@@ -259,17 +267,17 @@ def _full_ci_ordered(pyci_ham, nelec, max_cycle=1000, selfcheck=True):
         raise RuntimeError(
             f"extracted {len(dets)} determinants but got {c.size} coefficients."
         )
-    check = diagonalize(pyci_ham, dets, nelec, max_cycle)
-    if abs(check - fci_energy) > 1e-8:
-        raise RuntimeError(
-            f"self-check failed: all-determinant diagonalization gave {check:.10f}, "
-            f"full CI is {fci_energy:.10f}; the extraction is wrong."
-        )
+    if selfcheck:
+        check = diagonalize(pyci_ham, dets, nelec, max_cycle)
+        if abs(check - fci_energy) > 1e-8:
+            raise RuntimeError(
+                f"self-check failed: all-determinant diagonalization gave {check:.10f}, "
+                f"full CI is {fci_energy:.10f}; the extraction is wrong."
+            )
     order = np.argsort(-c)
     return [dets[i] for i in order], fci_energy
 
 
-# CLAUDE
 def bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha=1.6,
                    max_cycle=1000, progress=None):
     """
@@ -301,8 +309,13 @@ def bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha=1.6,
     while lo < hi:
         mid = (lo + hi) // 2
         e = err_mha(mid)
+        # explanation of this part. Progress is a function
+        # if progress is not provided (=None) then nothing happens
+        # if progress is provided then that function is executed 
+        # with arguments mid, e 
         if progress:
             progress(mid, e)
+
         if e <= target_mha:
             best, hi = (mid, e), mid
         else:
@@ -310,7 +323,6 @@ def bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha=1.6,
     return best
 
 
-# CLAUDE
 def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
                      progress=None, selfcheck=True):
     """
@@ -325,8 +337,8 @@ def minimal_subspace(pyci_ham, nelec, target_mha=1.6, max_cycle=1000,
     does — this is the subspace size QSCI would need in the best case.
     hpc/energy_vs_overlap.py measures how loose the bound actually is.
     """
-    ordered, fci_energy = _full_ci_ordered(pyci_ham, nelec, max_cycle, selfcheck)
-    n_fci = len(ordered)
-    n, err = bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha,
+    ordered_determinants, fci_energy = _full_ci_ordered(pyci_ham, nelec, max_cycle, selfcheck)
+    n_fci = len(ordered_determinants)
+    n, err = bisect_minimal(pyci_ham, ordered_determinants, nelec, fci_energy, target_mha,
                             max_cycle, progress)
     return n, n / n_fci, err, fci_energy, n_fci
