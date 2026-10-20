@@ -62,7 +62,6 @@ class G:
         self.__dict__.update(kw)
 
 
-# CLAUDE
 def _r(lo, hi, n):
     step = (hi - lo) / (n - 1)
     return [round(lo + i * step, 2) for i in range(n)]
@@ -111,7 +110,6 @@ SYSTEMS = [
 ]
 
 
-# CLAUDE
 def configurations(families=None):
     out = []
     for fam, atoms, (ne, no), lengths, basis in SYSTEMS:
@@ -122,7 +120,6 @@ def configurations(families=None):
     return out
 
 
-# CLAUDE
 def already_done(path):
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return set()
@@ -130,7 +127,6 @@ def already_done(path):
         return {row["config"] for row in csv.DictReader(f) if row.get("config")}
 
 
-# CLAUDE
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", type=float, default=1.6,
@@ -144,8 +140,7 @@ def main():
                          "size. It is a SECOND full CI solve, and the code path "
                          "is identical to the small systems where it passed.")
     ap.add_argument("--out", default="data/subspace/subspace_requirement.csv",
-                    help="results CSV; data/subspace/ is tracked in git, "
-                         "unlike outputs/")
+                    help="results CSV")
     ap.add_argument("--redo", action="store_true",
                     help="recompute configurations already in the CSV")
     args = ap.parse_args()
@@ -157,7 +152,7 @@ def main():
 
     print(f"target {args.target} mHa | {len(configs)} configuration(s), "
           f"{len(done)} already done, {len(todo)} to run")
-    print(f"writing {args.out}")
+    print(f"writing to {args.out}")
     print()
     header = (f"{'config':<14}{'basis':>8}{'qubits':>7}{'CI space':>11}"
               f"{'n needed':>10}{'fraction':>10}{'err(mHa)':>10}{'secs':>8}")

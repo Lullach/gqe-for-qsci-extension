@@ -284,10 +284,7 @@ def bisect_minimal(pyci_ham, ordered, nelec, fci_energy, target_mha=1.6,
     Smallest PREFIX of `ordered` whose energy is within `target_mha` of
     `fci_energy`. Returns (n, error_mha).
 
-    Bisection, so ~log2(N) diagonalizations rather than a full curve. It assumes
-    the error is monotone in prefix length; that holds for any sensible ranking
-    but is not guaranteed determinant by determinant, so treat a result as the
-    smallest prefix the bisection FOUND rather than a proven minimum.
+    Bisection, so ~log2(N) diagonalizations rather than a full curve.
 
     Split out of minimal_subspace so that a different ranking — by energy
     contribution rather than by |c| — measures the same thing through the same

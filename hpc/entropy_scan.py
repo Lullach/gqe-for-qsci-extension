@@ -9,6 +9,28 @@ plot_entropy_regression.py fit them.
 
 WHERE THE LAW COMES FROM
 ------------------------
+# CLAUDE 2026-10-19. STATUS: THE LAW BELOW IS WRONG AS STATED, AND S IS USELESS.
+# Treat any n_needed it predicts as an ARBITRARY DETERMINANT BUDGET, not a
+# derived requirement.
+#   (a) AEP does not apply. It is a statement about n i.i.d. copies; there is
+#       one CI vector and no n. The single-shot object is the smooth Renyi
+#       entropy H_0^eps (Renner & Wolf, ISIT 2004), for which
+#       log2 n_needed(eps) = H_0^eps EXACTLY, by definition. 2^H equals it only
+#       when p is flat on its support, and a CI vector is the opposite of flat.
+#   (b) Measured on data/subspace/entropy.csv (175 configurations): after
+#       controlling for log2 n_fci, the PARTIAL spearman with log2 n_needed is
+#       0.05 for S_cisd and 0.13 for H_cisd. System size alone scores 0.90.
+#       S carries essentially no information beyond the active-space dimension.
+#   (c) The best cheap predictor is R0.25_cisd (raw 0.92, partial 0.52), and it
+#       still fails where it matters: large systems are under-predicted by 2.6x
+#       on average, the strongly correlated third has 4x scatter, and the worst
+#       cases are off by 20x in both directions (h8_r3.09 needs 92, predicted
+#       1977; n2b_r2.50 needs 3418, predicted 196).
+# The usable form of the theory is the Renyi bound, valid for alpha < 1:
+#       N(eps) <= 2^{R_alpha} * eps^{-alpha/(1-alpha)}
+# i.e. log2 N <= R_alpha + const. Note the fit here gives slope 1.78 on
+# R0.25_cisd, not the 1.0 that form predicts, so even that is a heuristic.
+
 The CI coefficients define a probability distribution over determinants,
 p(D) = |c_D|^2. "How many determinants capture all but eps of the weight" is the
 smallest-eps-typical-set problem, and its answer to leading exponential order is
