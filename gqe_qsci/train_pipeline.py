@@ -501,7 +501,7 @@ class TrainPipeline(pl.LightningModule):
             best["global"] = qsci_result.global_refined
 
 
-    # CLAUDE
+    
     def training_step(self, batch, _):
         for k, v in batch.items():
             if torch.is_tensor(v):

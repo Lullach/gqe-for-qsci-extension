@@ -47,6 +47,10 @@ qsci:
   # with coverage set it becomes the ceiling, so a large active space cannot
   # demand an intractable diagonalisation.
   max_dim: 2000
+  # NOTE (2026-10-19): coverage is an ARBITRARY BUDGET, not a derived
+  # requirement. No formula predicts how many determinants a molecule needs —
+  # see the status block in hpc/entropy_scan.py. Its job is to make the cap
+  # mean the same thing across molecules, not to be the right number.
   # Target fraction of each molecule's full CI space, C(norb,na)*C(norb,nb).
   # null = flat max_dim everywhere (the original behaviour). Set it — 0.05 is a
   # sensible starting point — for cross-molecule work, where a flat cap makes

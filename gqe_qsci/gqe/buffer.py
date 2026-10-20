@@ -25,7 +25,7 @@ class ReplayBuffer:
         self.size = size
         self.buf = deque(maxlen=capacity)
 
-    # CLAUDE
+    
     def push(self, seq, energy, old_log_probs, reveal_step=None):
         """
         Store one rollout sample.
@@ -40,6 +40,7 @@ class ReplayBuffer:
         self.buf.append((seq, energy, old_log_probs, reveal_step))
         if len(self.buf) > self.size:
             self.buf.popleft()
+            #Are we popping anything we dont want to pop?
             
     def save(self, path):
         with open(path, "wb") as f:
@@ -49,7 +50,7 @@ class ReplayBuffer:
         with open(path, "rb") as f:
             self.buf = pickle.load(f)
             
-    # CLAUDE
+    
     def __getitem__(self, idx):
         item = self.buf[idx]
         seq, energy, old_log_probs, reveal_step = item
@@ -79,12 +80,12 @@ class BufferDataset(Dataset):
             "reveal_step": sample["reveal_step"],   # None for non-absorbing models
         }
     
-    # CLAUDE
+    
     def __len__(self):
         return len(self.buffer) * self.repetition
 
 
-# CLAUDE
+
 def buffer_collate_fn(batch):
     """
     Custom collate function for BufferDataset.
@@ -97,8 +98,7 @@ def buffer_collate_fn(batch):
     If all are None   → collated["reveal_step"] = None
     If all are tensors → collated["reveal_step"] = stacked (B, L) tensor
     Mixed is a bug (a buffer holding rollouts from more than one model type)
-    and raises instead of being papered over with zero-filled trajectories,
-    which would silently score those samples against a wrong path.
+    and raises error.
     """
     rs_list = [item["reveal_step"] for item in batch]
     rest = [{k: v for k, v in item.items() if k != "reveal_step"} for item in batch]

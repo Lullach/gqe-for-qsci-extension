@@ -176,6 +176,13 @@ class Factory:
         """
         The QSCI subspace cap for THIS molecule.
 
+        # CLAUDE 2026-10-19: this is a BUDGET, chosen, not a requirement
+        # computed from theory. Nothing here predicts how many determinants a
+        # molecule needs; the entropy law that claimed to is refuted in
+        # hpc/entropy_scan.py's status block. In the L=15 runs the cap never
+        # bound at all (no circuit of 30,000 per molecule reached it), so it
+        # currently constrains nothing.
+
         `qsci.coverage` (a fraction of the molecule's full CI space) makes the cap
         scale with system size:
 
