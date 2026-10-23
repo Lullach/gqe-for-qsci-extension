@@ -1,0 +1,74 @@
+# @package _global_
+# ROOM VERSION of hchain_dag_gnn.yaml: identical except cap (coverage 0.40), L=15, lr 2e-5,
+# exp_tag and W&B group. See the qsci block for why.
+# PHASE 5 — size extrapolation on hydrogen chains.
+#
+# Train one feature-based policy on H4 / H6 / H8 across nine bond lengths
+# (27 molecules, 8-16 qubits), evaluate ZERO-SHOT on H10 (20 qubits), which is
+# never trained on and larger than anything in the training set.
+#
+# Compare against experiment=hchain_baseline_h10, which trains directly on H10
+# for a matched number of rollout groups. Zero-shot approaching that baseline is
+# the claim; CASCI is the ceiling.
+#
+# max_iters is set from the SET SIZE, not copied from earlier experiments:
+# molecules are round-robined, so 27 training molecules at 20 rollout groups
+# each needs 540 epochs. Reusing the 200 of the LiH/H2O experiment would give
+# each molecule 7 groups and learn nothing.
+#
+# eval_every is raised to 50 for the same reason: at 10 it would fire ~54
+# zero-shot passes over four H10 geometries — the most expensive molecule in the
+# set — and evaluation would dominate the run.
+defaults:
+  - override /molecule_set: h_chains
+  - override /model: dag_gnn_features
+
+exp_tag: hchain-room-dag-gnn-s${trainer.seed}
+ngates: 15   # H10 needs L >= 15 by the 2^L support ceiling (NOTES, Large-system requirements)
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: hchain-room
+  tags: ["h-chains", "phase5", "size-extrapolation", "dag", "featscorer", "zeroshot"]
+  notes: >-
+    Size extrapolation. Trains on H4/H6/H8 (8/12/16 qubits) at nine bond
+    lengths from 0.7 to 2.8 A, 27 molecules total, and evaluates zero-shot on
+    H10 (20 qubits) at 1.1/1.6/2.4/3.0 A. 1.1 and 2.4 also appear in training,
+    so those two isolate size extrapolation; 1.6 and 3.0 are unseen in both
+    size and geometry. Baseline for comparison: hchain_baseline_h10.
+trainer:
+  max_iters: 540          # 27 train molecules -> ~20 rollout groups each
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10         # must equal num_samples (one molecule per group)
+  step_per_epoch: 30
+  load_checkpoint: false  # multi-molecule resume is not supported
+  checkpoint_every_n_iters: 100
+  eval_every: 50          # ~11 zero-shot passes, not ~54
+  precision: 32-true
+  optimizer:
+    lr: 2e-5             # best DAG GNN lr in the N2 sweep; 5e-6 was too low for every model
+sampler:
+  # 10k, not the paper's 1k. With 1000 shots an N2 circuit sampled only 31
+  # DISTINCT determinants (num_sampled_basis), so the raw QSCI subspace was
+  # sampling-limited rather than cap-limited — raising qsci.coverage alone
+  # would only let classical refinement fill more of it, not improve the
+  # circuit's own energy. Shots have to scale with the CI space too.
+  shots: 10_000
+qsci:
+  # ROOM IN THE SUBSPACE (2026-10-23). The 5% cap of the first H-chain runs sat far
+  # below what H-chains need: the exact scan (data/subspace/) puts the worst case at
+  # ~36% of the CI space for every chain length (h8 35.8%, h10 35.4%; H10 at 1.6 A
+  # needs 28.1%, scratch/oracle_h10_cap.txt). Cap set from
+  # the requirement: here just above the worst case (~36%) -> 40% of each
+  # molecule's space. Lower than the 2x used for N2/LiF, so refinement does not
+  # get close to full CI; H10 at 1.6 A (28.1%) still has ~1.4x room.
+  # Consequence: refinement alone can reach chemical accuracy, so the stage that
+  # compares transfer vs baseline is GQE-optimized (the circuits), not Global-refined.
+  coverage: 0.40
+  max_dim: 26000    # ceiling above 0.40 * 63,504 (H10), so coverage decides everywhere
+  min_dim: 50

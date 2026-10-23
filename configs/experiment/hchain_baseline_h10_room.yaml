@@ -1,0 +1,74 @@
+# @package _global_
+# ROOM VERSION of hchain_baseline_h10.yaml: identical except cap (coverage 0.40), L=15, lr 2e-5,
+# exp_tag and W&B group. See the qsci block for why.
+# CONTROL for experiment=hchain_dag_gnn: the same policy trained DIRECTLY on
+# H10, the molecule the Phase 5 experiment holds out.
+#
+# Without this, "zero-shot reached X mHa on H10" says nothing. The question is
+# how much of trained-on-H10 performance a policy that never saw H10 recovers.
+#
+# Matched on everything that affects difficulty: same model, same pool settings,
+# same ngates, same shots, same dmax, same rollout size.
+#
+# max_iters matches the TOTAL TRAINING BUDGET. One epoch is one rollout group,
+# so hchain_dag_gnn's 540 epochs are 540 groups (20 on each of 27 molecules);
+# this run spends the same 540 entirely on H10. The only difference between the
+# two runs is then which molecules the budget went to, which is the comparison
+# the experiment exists to make.
+#
+# The alternative reading — match PER-MOLECULE groups, i.e. 20 — would be a
+# strawman: no one training for H10 would stop after 20 groups. Matching the
+# total is the harder, more honest test, since the baseline gets every step on
+# the target. (With the old 2-molecule set the two readings coincided at 100,
+# which is why xmol_baseline_n2 does not have to make the choice explicit.)
+defaults:
+  - override /molecule: h10
+  - override /model: dag_gnn_features
+
+exp_tag: hchain-room-baseline-h10-s${trainer.seed}
+ngates: 15   # H10 needs L >= 15 by the 2^L support ceiling (NOTES, Large-system requirements)
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: hchain-room
+  tags: ["h-chains", "phase5", "baseline", "trained-on-h10", "dag", "featscorer"]
+  notes: >-
+    Matched baseline for the H-chain size-extrapolation experiment: the same
+    feature-based DAG GNN trained directly on H10 (20 qubits, 1.6 A) rather
+    than transferring from H4/H6/H8. Compare against hchain_dag_gnn's
+    zeroshot/h10_r1.60 metrics.
+trainer:
+  max_iters: 540          # matches hchain_dag_gnn's total rollout groups
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 100
+  precision: 32-true
+  optimizer:
+    lr: 2e-5             # best DAG GNN lr in the N2 sweep; 5e-6 was too low for every model
+sampler:
+  # 10k, not the paper's 1k. With 1000 shots an N2 circuit sampled only 31
+  # DISTINCT determinants (num_sampled_basis), so the raw QSCI subspace was
+  # sampling-limited rather than cap-limited — raising qsci.coverage alone
+  # would only let classical refinement fill more of it, not improve the
+  # circuit's own energy. Shots have to scale with the CI space too.
+  shots: 10_000
+qsci:
+  # ROOM IN THE SUBSPACE (2026-10-23). The 5% cap of the first H-chain runs sat far
+  # below what H-chains need: the exact scan (data/subspace/) puts the worst case at
+  # ~36% of the CI space for every chain length (h8 35.8%, h10 35.4%; H10 at 1.6 A
+  # needs 28.1%, scratch/oracle_h10_cap.txt). Cap set from
+  # the requirement: here just above the worst case (~36%) -> 40% of each
+  # molecule's space. Lower than the 2x used for N2/LiF, so refinement does not
+  # get close to full CI; H10 at 1.6 A (28.1%) still has ~1.4x room.
+  # Consequence: refinement alone can reach chemical accuracy, so the stage that
+  # compares transfer vs baseline is GQE-optimized (the circuits), not Global-refined.
+  coverage: 0.40
+  max_dim: 26000    # ceiling above 0.40 * 63,504 (H10), so coverage decides everywhere
+  min_dim: 50
