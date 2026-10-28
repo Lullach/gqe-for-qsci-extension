@@ -143,10 +143,28 @@ def main():
                     help="results CSV")
     ap.add_argument("--redo", action="store_true",
                     help="recompute configurations already in the CSV")
+    # CLAUDE: bond lengths for ONE family, overriding the SYSTEMS grid. Needed
+    # because a molecule_set can use geometries the grid never visited (the
+    # n2_bond_scan set asks for 1.0/1.3/1.6/2.0/2.8, the grid has 1.07/1.33/...),
+    # and the requirement moves fast enough with bond length that snapping to a
+    # neighbour is not safe: N2 needs 122 at 1.07 and 100 at 1.1.
+    ap.add_argument("--lengths", default=None,
+                    help="comma-separated bond lengths, e.g. 1.0,1.3,1.6; "
+                         "requires exactly one --families entry")
     args = ap.parse_args()
 
     fams = {s.strip() for s in args.families.split(",")} if args.families else None
     configs = configurations(fams)
+    if args.lengths:
+        if not fams or len(fams) != 1:
+            ap.error("--lengths needs exactly one --families entry")
+        fam = next(iter(fams))
+        spec = next((s for s in SYSTEMS if s[0] == fam), None)
+        if spec is None:
+            ap.error(f"unknown family {fam}")
+        _, atoms, (ne, no), _, basis = spec
+        configs = [(f"{fam}_r{float(r):.2f}", fam, atoms, ne, no, float(r), basis)
+                   for r in args.lengths.split(",")]
     done = set() if args.redo else already_done(args.out)
     todo = [c for c in configs if c[0] not in done]
 
