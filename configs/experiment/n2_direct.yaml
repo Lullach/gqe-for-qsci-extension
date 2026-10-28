@@ -1,0 +1,38 @@
+# @package _global_
+# THE DIRECT / NO-CIRCUIT ARM on N2 at 2.5 A. Not a quantum method: this is the
+# ablation that measures what routing the same policy through a circuit costs.
+# Compare against n2L15_gpt2 (same molecule, same max_dim) at matched achieved
+# subspace_dim -- see direct_qsci/README.md.
+#
+# No sampler: there are no shots, no gates and no operator pool. One epoch is
+# num_samples diagonalisations instead of num_samples 10k-shot simulations.
+defaults:
+  - override /molecule: n2
+  - override /model: determinant_gpt2
+
+exp_tag: n2-direct-s${trainer.seed}
+operator_pool:
+  # Read ONLY for get_orbital_features(); false keeps CCSD out of the loop
+  # entirely, which is the point of this arm.
+  ccsd_screening: false
+model:
+  n_dets: auto          # 102 for N2 at 2.5 A, from subspace_requirement.csv
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: direct-vs-circuit-n2
+  tags: ["direct", "no-circuit", "ablation", "n2"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 50
+  precision: 32-true
+qsci:
+  coverage: null
+  max_dim: 204

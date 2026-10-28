@@ -20,6 +20,12 @@ hpc/numpy_sampler.py
 # QSCI: subspace selection, diagonalization, refinement, classical baselines
 gqe_qsci/qsci/
 
+# The direct / no-circuit arm: a policy proposes determinants and the same QSCI
+# path diagonalises them. Subspace selection, so core by the definition above,
+# even though it sits outside gqe_qsci (it is not a generative quantum
+# eigensolver -- see direct_qsci/README.md).
+direct_qsci/
+
 # GQE updates and wiring (training_step and the rollout/reward path live in
 # train_pipeline.py, mixed with logging; factory.py builds the pools and sets
 # the subspace cap in _resolve_max_dim)

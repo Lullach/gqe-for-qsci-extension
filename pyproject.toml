@@ -39,7 +39,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["gqe_qsci"]
+packages = ["gqe_qsci", "direct_qsci"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

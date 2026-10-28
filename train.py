@@ -125,7 +125,14 @@ def train(cfg):
     seed_everything(cfg.trainer.seed, workers=True)
     callbacks = setup_callbacks(cfg)
     logger = setup_logger(cfg)
-    training = TrainPipeline(Factory(), cfg)
+    # The direct / no-circuit arm brings its own factory (direct_qsci), so
+    # gqe_qsci.factory does not have to know it exists.
+    if "direct_qsci" in (getattr(cfg.model, "_target_", "") or ""):
+        from direct_qsci.factory import DirectFactory
+        factory = DirectFactory()
+    else:
+        factory = Factory()
+    training = TrainPipeline(factory, cfg)
     trainer = Trainer(
         logger=logger if logger is not None else False,
         callbacks=callbacks,

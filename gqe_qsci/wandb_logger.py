@@ -75,6 +75,13 @@ def _(result: QSCIResult, *, prefix: str = "", ref_energy: dict[str, float] | No
             d[_prefix_key(f"energy/min - {ref_key}", prefix)] = energy_min - ref_val
 
     d[_prefix_key("subspace_dim/max", prefix)] = max(result.subspace_dim)
-    d[_prefix_key("cx_count/max", prefix)] = max(result.cx_counts)
-    d[_prefix_key("total_gates/max", prefix)] = max(result.total_gates)
+    # CLAUDE: circuit-free arms (direct_qsci) report cx_count/total_gates as
+    # None, and max() over Nones raises. Guarded the same way the per-sample
+    # extractor above already guards them, so the keys are ABSENT rather than
+    # zero -- "this arm executes no gates" should not be logged as a gate count.
+    for key, values in (("cx_count/max", result.cx_counts),
+                        ("total_gates/max", result.total_gates)):
+        present = [v for v in values if v is not None]
+        if present:
+            d[_prefix_key(key, prefix)] = max(present)
     return d

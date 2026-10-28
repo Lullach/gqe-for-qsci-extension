@@ -1,0 +1,22 @@
+# The DIRECT / no-circuit arm: the policy emits a determinant SET, there is no
+# circuit, no operator pool, no gate angles and no CCSD anywhere in the loop.
+# This is the ceiling/ablation arm -- see direct_qsci/README.md. Do not report
+# it as a quantum method.
+_target_: direct_qsci.policy.DeterminantGPT2Policy
+
+# Budget: how many determinants the policy emits per sample.
+# "auto" reads the MEASURED requirement for this molecule from
+# data/subspace/subspace_requirement.csv (N2 at 2.5 A -> 102). It is a
+# measurement, not a prediction, so it fails loudly for a molecule that was
+# never solved exactly; set an integer here to override.
+n_dets: auto
+
+# Transformer capacity. n_positions is max_tokens + 1, and one sample is
+# n_dets * (n_alpha + n_beta) tokens: 1020 for N2 at n_dets=102. For a
+# molecule SET this must cover the largest member, so set it explicitly there.
+max_tokens: null
+
+hidden_size: 256
+num_layers: 6
+num_heads: 8
+dropout: 0.1

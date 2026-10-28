@@ -52,6 +52,10 @@ class MoleculeBundle:
     commutation_matrix: Any         # (V, V) bool
     x_value: float | None = None    # scan coordinate (e.g. bond length) for
     x_label: str = "x"              # summary plots; None for non-scan sets
+    # Determinant budget for the direct / no-circuit arm (direct_qsci), where
+    # each molecule gets its own MEASURED requirement. None for every
+    # circuit-based policy, which sizes itself by ngates instead.
+    n_dets: int | None = None
 
     # CLAUDE
     @property
