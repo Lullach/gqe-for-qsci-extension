@@ -1,8 +1,8 @@
 """
-QSCI without the quantum circuit -- the direct / ablation arm.
+QSCI without the quantum circuit -- the direct / ablation pipeline.
 
 A policy proposes DETERMINANTS, they are diagonalised by the same QSCI path the
-circuit arm uses, and the energy is the reward. No operator pool, no gates, no
+circuit pipeline uses, and the energy is the reward. No operator pool, no gates, no
 angles, no CCSD, no sampling shots.
 
 This is deliberately NOT part of gqe_qsci: it is not a generative quantum

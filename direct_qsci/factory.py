@@ -1,7 +1,7 @@
-# CLAUDE 2026-10-28. Wiring only: this keeps the direct / no-circuit arm out of
-# gqe_qsci.factory, which should not have to know that this arm exists.
+# CLAUDE 2026-10-28. Wiring only: this keeps the direct / no-circuit pipeline out of
+# gqe_qsci.factory, which should not have to know that this pipeline exists.
 """
-Factory for the direct arm.
+Factory for the direct pipeline without a circuit.
 
 Subclasses the GQE factory and overrides exactly two things:
 
@@ -11,8 +11,7 @@ Subclasses the GQE factory and overrides exactly two things:
                              a multi-molecule run gives every molecule its own
 
 Everything else -- molecule, QSCI pipeline, loss, scheduler, logger -- is
-inherited unchanged, which is the point: the two arms must share every piece
-that is not the circuit, or the comparison measures the wrong thing.
+inherited unchanged.
 """
 from __future__ import annotations
 
@@ -29,7 +28,6 @@ _log = logging.getLogger(__name__)
 class DirectFactory(Factory):
     """Use when cfg.model is a direct_qsci policy."""
 
-    # CLAUDE
     def create_model(self, cfg, op_pool=None):
         target = getattr(cfg.model, "_target_", "") or ""
         if "direct_qsci" not in target:
@@ -46,7 +44,7 @@ class DirectFactory(Factory):
 
         n_alpha, n_beta = (int(x) for x in molecule.nelec)
         # The pool is read ONLY for get_orbital_features(); there is no menu,
-        # no angle and no CCSD in this arm. Run with
+        # no angle and no CCSD in this pipeline. Run with
         # operator_pool.ccsd_screening=false so building it stays cheap.
         return instantiate(
             cfg.model,
@@ -56,7 +54,6 @@ class DirectFactory(Factory):
             n_dets=int(n_dets),
         )
 
-    # CLAUDE
     def create_qsci_pipeline(self, cfg):
         """The determinant pipeline: no sampler, no operator pool."""
         from direct_qsci.pipeline import DirectQSCIPipeline
@@ -75,9 +72,7 @@ class DirectFactory(Factory):
         """
         Bundles as usual, plus each molecule's own determinant requirement.
 
-        The budget is per molecule by design: 102 determinants is N2 at 2.5 A,
-        not a universal number, and a transfer run spans molecules whose
-        requirements differ by an order of magnitude. x_value carries the bond
+        The budget is per molecule by design. x_value carries the bond
         length for scan and chain sets; heterogeneous sets have none, and then
         the active space alone must identify the row or the lookup raises.
         """

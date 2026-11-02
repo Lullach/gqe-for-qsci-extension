@@ -1,4 +1,4 @@
-# CLAUDE 2026-10-28. Reference implementation of the direct / no-circuit arm,
+# CLAUDE 2026-10-28. Reference implementation of the direct / no-circuit pipeline,
 # for Lukas to review. NOT run end to end (transformers lives only in the
 # container); the mask is verified by scratch/check_determinant_mask.py.
 # Lives outside gqe_qsci on purpose -- see direct_qsci/README.md.

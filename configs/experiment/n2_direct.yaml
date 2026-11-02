@@ -13,7 +13,7 @@ defaults:
 exp_tag: n2-direct-s${trainer.seed}
 operator_pool:
   # Read ONLY for get_orbital_features(); false keeps CCSD out of the loop
-  # entirely, which is the point of this arm.
+  # entirely, which is the point of this pipeline.
   ccsd_screening: false
 model:
   n_dets: auto          # 102 for N2 at 2.5 A, from subspace_requirement.csv
@@ -31,7 +31,7 @@ trainer:
   buffer_size: 10
   step_per_epoch: 30
   load_checkpoint: false
-  checkpoint_every_n_iters: 50
+  checkpoint_every_n_iters: 20
   precision: 32-true
 qsci:
   coverage: null

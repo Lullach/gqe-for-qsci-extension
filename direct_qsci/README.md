@@ -4,15 +4,15 @@
 
 The same learning problem as the main pipeline, minus the quantum part:
 
-    circuit arm   policy -> gates -> circuit -> 10k shots -> determinants -> QSCI energy
-    direct arm    policy ----------------------> determinants -> QSCI energy
+    circuit pipeline   policy -> gates -> circuit -> 10k shots -> determinants -> QSCI energy
+    direct pipeline    policy ----------------------> determinants -> QSCI energy
 
-Everything downstream of "determinants" is shared code, so the two arms differ
+Everything downstream of "determinants" is shared code, so the two pipelines differ
 only in where the determinants come from.
 
 ## What it is for
 
-It is the **ceiling / ablation** arm, not a proposed method. Three reasons it
+It is the **ceiling / ablation** pipeline, not a proposed method. Three reasons it
 earns its place:
 
 1. It measures what the circuit costs. Same policy family, same features, same

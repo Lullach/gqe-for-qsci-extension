@@ -1,0 +1,42 @@
+# @package _global_
+# CAPACITY-MATCHED direct pipeline: n_embd 96, 4 layers, 4 heads -- the same shape
+# as n2L15_gpt2_small's `size: matched` (~0.46M parameters), so the comparison
+# is "circuit vs no circuit" rather than "big model vs small model".
+#
+# The L15 runs showed capacity mattered for the circuit pipeline (43M reached 3.75
+# mHa, 0.46M only 5.10), so the direct pipeline has to be compared at a stated
+# capacity, not at whatever the default happened to be.
+#
+# Compare against: outputs/gqe-for-qsci/n2L15-gpt2-small-s*/results.csv,
+# at matched ACHIEVED subspace_dim (see docs/run_notes/arch-comparison-L15-room.md).
+defaults:
+  - override /molecule: n2
+  - override /model: determinant_gpt2
+
+exp_tag: n2-direct-small-s${trainer.seed}
+operator_pool:
+  ccsd_screening: false     # the pool is read only for orbital features
+model:
+  n_dets: auto              # 102 for N2 at 2.5 A
+  hidden_size: 96
+  num_layers: 4
+  num_heads: 4
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: direct-vs-circuit-n2
+  tags: ["direct", "no-circuit", "ablation", "n2", "matched-capacity"]
+trainer:
+  max_iters: 100
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 20
+  precision: 32-true
+qsci:
+  coverage: null
+  max_dim: 204
