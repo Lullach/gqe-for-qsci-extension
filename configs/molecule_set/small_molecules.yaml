@@ -1,0 +1,299 @@
+# Small-molecule transfer: train on LiF, BeO, BN, C2, evaluate zero-shot on N2 and CO.
+#
+# All 16 qubits (STO-3G, full valence, 8 orbitals), so this tests transfer across
+# CHEMISTRY, not size (the H-chain set does size). 3,136-4,900 determinants, and
+# chemical accuracy needs 0.1-12.3% of that (data/subspace/subspace_requirement.csv),
+# against ~36% for H-chains. The first bond length per molecule is close to
+# equilibrium, the later ones stretched, so correlation strength varies too.
+#
+# BH, BeH2 and HF are left out on purpose: with qsci.min_dim 50, HF (25 determinants)
+# is full CI and BH (100) half its space, so they give little or no training signal.
+#
+# Select with: experiment=smallmol_<model>
+molecules:
+  - name: lif_r1.55
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Li', 'F']
+        bond_length: 1.55
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: lif_r1.90
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Li', 'F']
+        bond_length: 1.9
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: lif_r2.25
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Li', 'F']
+        bond_length: 2.25
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: lif_r2.95
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Li', 'F']
+        bond_length: 2.95
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: beo_r1.25
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Be', 'O']
+        bond_length: 1.25
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: beo_r1.50
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Be', 'O']
+        bond_length: 1.5
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: beo_r2.00
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Be', 'O']
+        bond_length: 2.0
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: beo_r2.50
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['Be', 'O']
+        bond_length: 2.5
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: bn_r1.25
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['B', 'N']
+        bond_length: 1.25
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: bn_r1.50
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['B', 'N']
+        bond_length: 1.5
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: bn_r2.00
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['B', 'N']
+        bond_length: 2.0
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: bn_r2.50
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['B', 'N']
+        bond_length: 2.5
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: c2_r1.27
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['C', 'C']
+        bond_length: 1.27
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: c2_r1.55
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['C', 'C']
+        bond_length: 1.55
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: c2_r2.10
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['C', 'C']
+        bond_length: 2.1
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: c2_r2.65
+    split: train
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['C', 'C']
+        bond_length: 2.65
+      basis: 'sto-3g'
+      nelecas: 8
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: n2_r1.07
+    split: eval
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['N', 'N']
+        bond_length: 1.07
+      basis: 'sto-3g'
+      nelecas: 10
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: n2_r1.60
+    split: eval
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['N', 'N']
+        bond_length: 1.6
+      basis: 'sto-3g'
+      nelecas: 10
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: n2_r2.50
+    split: eval
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['N', 'N']
+        bond_length: 2.5
+      basis: 'sto-3g'
+      nelecas: 10
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: co_r1.16
+    split: eval
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['C', 'O']
+        bond_length: 1.16
+      basis: 'sto-3g'
+      nelecas: 10
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: co_r1.69
+    split: eval
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['C', 'O']
+        bond_length: 1.69
+      basis: 'sto-3g'
+      nelecas: 10
+      norbcas: 8
+      spin: 0
+      charge: 0
+  - name: co_r2.50
+    split: eval
+    molecule:
+      _target_: gqe_qsci.molecule.PySCFMolecule
+      geometry:
+        type: linear_chain
+        atoms: ['C', 'O']
+        bond_length: 2.5
+      basis: 'sto-3g'
+      nelecas: 10
+      norbcas: 8
+      spin: 0
+      charge: 0

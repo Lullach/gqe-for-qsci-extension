@@ -1,0 +1,12 @@
+# CO, STO-3G, full valence (10e, 8o) -> 16 qubits, 3,136 determinants.
+# Bond length is overridden per experiment; 1.16 A is close to equilibrium in the scan grid.
+_target_: gqe_qsci.molecule.PySCFMolecule
+geometry:
+  type: linear_chain
+  atoms: ['C', 'O']
+  bond_length: 1.16
+basis: 'sto-3g'
+nelecas: 10
+norbcas: 8
+spin: 0
+charge: 0

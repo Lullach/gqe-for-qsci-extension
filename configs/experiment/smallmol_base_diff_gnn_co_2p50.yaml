@@ -1,0 +1,42 @@
+# @package _global_
+# BASELINE for smallmol_diff_gnn: same model, same cap and total budget, trained from
+# scratch on CO at 2.50 A, the geometry the transfer run sees only zero-shot.
+defaults:
+  - override /molecule: co
+  - override /model: diffusion_gnn_absorbing_features
+
+molecule:
+  geometry:
+    bond_length: 2.5
+
+exp_tag: smallmol-base-diff-gnn-co-r2.50-s${trainer.seed}
+ngates: 15
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: smallmol-transfer
+  tags: ['smallmol', 'baseline', 'diff-gnn', 'co']
+trainer:
+  max_iters: 640          # 16 training molecules x 40 epochs; baselines get the same total
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 160
+  precision: 32-true
+  optimizer:
+    lr: 4e-5             # best lr of this model in the N2 sweep (tuned on one molecule)
+sampler:
+  shots: 10_000
+qsci:
+  # 2x the worst requirement in the set (BN at 1.25 A: 604/4,900 = 12.3%). The same
+  # fraction for every molecule keeps the reward comparable. Refinement gets close to
+  # exact at this cap, so compare GQE-optimized, not Global-refined.
+  coverage: 0.25
+  max_dim: 2000     # ceiling above 0.25 * 4,900, so coverage decides everywhere
+  min_dim: 50
