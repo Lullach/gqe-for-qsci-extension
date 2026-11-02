@@ -61,8 +61,11 @@ class _CircuitGNNBase(Policy):
     ----------
     graph_type : str
         "chain"  Bidirectional chain i ↔ i+1.  Encodes gate ordering directly.
-                 After k layers, information travels k hops; 6 layers covers
-                 the full L=10 sequence.  Recommended default.
+                 After k layers, information travels k hops, so a position
+                 only sees positions within +-k. (CLAUDE 2026-10-20: this used
+                 to claim 6 layers cover L=10; the chain ends are 9 hops
+                 apart, so they do not. See the TODO in
+                 configs/model/diffusion_gnn_absorbing_features.yaml.)
         "full"   All pairs connected.  Equivalent to Transformer without the
                  softmax weighting.  Useful as an ablation baseline; loses the
                  GNN's sparsity advantage.
@@ -266,8 +269,10 @@ class CircuitGNNModelAbsorbing(_CircuitGNNBase):
     """
     Absorbing-diffusion policy using a GNN denoiser instead of TransformerEncoder.
 
-    Forward process, reverse process, mask pre-sampling and ELBO log_prob are
-    identical to CircuitDiffusionModelAbsorbing — only the backbone changes.
+    Forward process, reverse process and the trajectory (DDPO-style) log_prob
+    are identical to CircuitDiffusionModelAbsorbing — only the backbone changes.
+    (CLAUDE 2026-10-20: this used to say "mask pre-sampling and ELBO log_prob";
+    both were replaced by the trajectory log_prob, see log_prob below.)
 
     NOTE: The diffusion logic is intentionally duplicated from
     CircuitDiffusionModelAbsorbing rather than using multiple inheritance, to

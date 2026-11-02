@@ -7,7 +7,11 @@
 # not the generation paradigm (contrast dag_gnn, which builds a circuit DAG).
 #
 # num_layers=6: GNN needs more layers than Transformer because each layer
-#   propagates information only 1 hop. 6 layers covers the full L=10 sequence.
+#   propagates information only 1 hop. NOTE (2026-10-20): 6 layers does NOT
+#   cover the full L=10 sequence, as this comment used to say: the ends of a
+#   10-node chain are 9 hops apart, so positions only see +-6. At L=15 the gap
+#   is worse. Probably make it more global before comparing it again (see the
+#   TODO in diffusion_gnn_absorbing_features.yaml).
 # hidden_size=128: smaller than diffusion_absorbing_matched (256) since the
 #   GNN is a different architecture.
 # graph_type: "chain" (recommended) or "full" (ablation baseline).

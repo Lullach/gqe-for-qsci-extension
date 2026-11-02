@@ -8,6 +8,14 @@
 # NOTE: the graph here is over gate POSITIONS (a chain), not qubit wires, so
 # there is no per-qubit-index embedding to make portable — unlike the DAG GNN.
 #
+# TODO (2026-10-20): the denoiser is LOCAL. On a chain, one GAT layer = one hop,
+# so with num_layers 6 a position only sees positions within +-6. At ngates 15
+# (the L=15 runs) gates far apart never influence each other's prediction in a
+# forward pass; the TransformerEncoder version connects all positions in every
+# layer. Probably change this to make it more global before comparing it again:
+# graph_type: full, more layers (>= ngates - 1 covers the chain), or a few
+# long-range edges.
+#
 # Requires torch_geometric:  pip install torch_geometric
 #
 # Use config  model=diffusion_gnn_absorbing_features  to select this variant.
