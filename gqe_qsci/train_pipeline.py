@@ -197,6 +197,10 @@ class TrainPipeline(pl.LightningModule):
             model=target.rsplit(".", 1)[-1] or "unknown",
             seed=int(self.config.trainer.seed),
             n_params=sum(p.numel() for p in self.model.parameters()),
+            # Not resuming => this run starts at epoch 0, so any existing
+            # results.csv belongs to a different run and is rotated aside
+            # rather than appended to (duplicate epoch numbers otherwise).
+            fresh=not bool(self.config.trainer.get("load_checkpoint", False)),
         )
 
     # CLAUDE

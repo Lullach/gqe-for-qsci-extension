@@ -1,5 +1,6 @@
 import os
 import functools
+import time
 
 import torch
 import hydra, wandb
@@ -128,10 +129,23 @@ def setup_logger(cfg):
     save_dir = cfg.output
     run_id_file = os.path.join(save_dir, "run_id")
     run_id = None
+    # CLAUDE 2026-10-30. A stored run_id makes W&B RESUME that run. Correct on a
+    # resume, wrong on a fresh start: training restarts at epoch 0, so the new
+    # history would be interleaved with the interrupted attempt's in one run and
+    # no plot could tell them apart. Same reasoning as the results.csv rotation
+    # in results_log.py -- keep the old run, start a new one.
     if os.path.exists(run_id_file):
-        with open(run_id_file, "r") as f:
-            run_id = f.read().strip()
-        print(f"Resuming training from run_id: {run_id}")
+        if cfg.trainer.get("load_checkpoint", False):
+            with open(run_id_file, "r") as f:
+                run_id = f.read().strip()
+            print(f"Resuming W&B run {run_id}")
+        else:
+            stamp = time.strftime("%Y%m%d-%H%M%S",
+                                  time.localtime(os.path.getmtime(run_id_file)))
+            os.replace(run_id_file, f"{run_id_file}.{stamp}")
+            print(f"run_id held a previous attempt and this run starts at "
+                  f"epoch 0; moved it to run_id.{stamp} and starting a new "
+                  f"W&B run")
     wandb_config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     choices, setup = run_provenance(cfg)
     wandb_config["choices"] = choices

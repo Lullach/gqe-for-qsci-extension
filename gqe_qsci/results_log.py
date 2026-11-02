@@ -32,6 +32,7 @@ dataframe.
 import csv
 import logging
 import os
+import time
 
 _log = logging.getLogger(__name__)
 
@@ -75,8 +76,13 @@ class ResultsWriter:
     """
 
     def __init__(self, path: str, *, exp_tag: str, model: str, seed,
-                 n_params: int | None = None):
+                 n_params: int | None = None, fresh: bool = False):
         self.path = path
+        # fresh=True means "this run starts at epoch 0". Appending then would
+        # restart the epoch column at 0 inside a file that already counts to N,
+        # and every reader that groups by epoch would silently merge two runs.
+        # Rotate the old file aside instead of appending or deleting it.
+        self._fresh = bool(fresh)
         # n_params is recorded because an architecture comparison with unequal
         # capacity is confounded: without it, "GPT-2 won" cannot be separated
         # from "GPT-2 had 100x the parameters".
@@ -89,6 +95,13 @@ class ResultsWriter:
         if self._ready:
             return
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        if self._fresh and os.path.exists(self.path) and os.path.getsize(self.path):
+            stamp = time.strftime("%Y%m%d-%H%M%S",
+                                  time.localtime(os.path.getmtime(self.path)))
+            archived = self.path.replace(".csv", f".{stamp}.csv")
+            os.replace(self.path, archived)
+            _log.warning("results.csv held a previous run and this one starts "
+                         "at epoch 0; moved it to %s", os.path.basename(archived))
         # Append across restarts, but only write the header for a new file.
         new = not os.path.exists(self.path) or os.path.getsize(self.path) == 0
         if new:
