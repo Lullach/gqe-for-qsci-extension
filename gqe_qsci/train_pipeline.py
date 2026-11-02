@@ -586,10 +586,17 @@ class TrainPipeline(pl.LightningModule):
         }
         if not self.multi_molecule:
             scistate = self.qsci_pipeline.global_refined_scistates
-            extra["global_refined_scistates"] = {
-                "coeffs": np.asarray(scistate),
-                "strs": getattr(scistate, "_strs", None),
-            }
+            # CLAUDE: skip the key when there is no refinement state rather than
+            # storing np.asarray(None), which is a 0-d OBJECT array. torch's
+            # weights_only loader rejects object dtype, so writing it made the
+            # checkpoint unresumable. The direct pipeline never refines, so this was
+            # every one of its checkpoints. on_load_checkpoint already treats a
+            # missing key as "nothing to restore".
+            if scistate is not None:
+                extra["global_refined_scistates"] = {
+                    "coeffs": np.asarray(scistate),
+                    "strs": getattr(scistate, "_strs", None),
+                }
         else:
             # Per-molecule QSCI refinement state is not persisted, and the model
             # buffers are sized to whichever molecule is active at save time, so
@@ -617,7 +624,18 @@ class TrainPipeline(pl.LightningModule):
             }
         if "global_refined_scistates" in extra_info and not self.multi_molecule:
             data = extra_info["global_refined_scistates"]
-            self.qsci_pipeline.global_refined_scistates = as_scivector(data["coeffs"], data["strs"])
+            coeffs = data["coeffs"]
+            # CLAUDE: checkpoints written before 2026-10-30 stored
+            # np.asarray(None) here whenever there was no refinement state, which
+            # is a 0-d object array (see on_save_checkpoint). as_scivector turns
+            # that into "int() argument must be ... not NoneType", so without this
+            # guard no such checkpoint can be resumed. Treat it as absent.
+            if coeffs is not None and getattr(coeffs, "dtype", None) != object:
+                self.qsci_pipeline.global_refined_scistates = as_scivector(
+                    coeffs, data["strs"]
+                )
+            else:
+                _log.info("checkpoint carries no global refinement state; skipping")
         self.buffer.load(f"{self.config.output}/buffer.pkl")
 
     def set_seed(self, seed: int):

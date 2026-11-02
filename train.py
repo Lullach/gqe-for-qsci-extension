@@ -11,6 +11,46 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 from gqe_qsci.train_pipeline import TrainPipeline
 from gqe_qsci.factory import Factory
+import numpy as np
+
+from gqe_qsci.qsci.schema import QSCISampleResult
+
+# CLAUDE 2026-10-30. torch >= 2.6 calls torch.load with weights_only=True, which
+# refuses to unpickle any class it was not told about, so EVERY resume failed
+# ("Unsupported global: QSCISampleResult") and load_checkpoint=false was the
+# standing workaround.
+#
+# This is the complete set of non-tensor globals our own checkpoints contain,
+# enumerated with pickletools on a real file rather than guessed: the sample
+# record in extra_info["best"], and the four numpy entries behind the arrays in
+# extra_info. OrderedDict and the torch storage types are permitted by default;
+# numpy is NOT, despite being ubiquitous.
+#
+# ObjectDType is the one that deserves a note. It is here only because a 0-d
+# object array can reach the file (see TrainPipeline.on_save_checkpoint), and
+# allowing a *dtype* opens nothing by itself -- weights_only still checks every
+# class inside the array against this same list.
+#
+# CAVEAT, so this block is not read as more careful than it is: the
+# `torch.load = functools.partial(..., weights_only=False)` line BELOW already
+# makes weights_only=False the default for every torch.load in this process.
+# An allowlist of five classes would be strictly narrower than that -- but only
+# if the monkeypatch were gone. As things stand the blanket default is the wider
+# of the two and this list does not constrain it.
+#
+# They are not redundant, which is why both stay for now: functools.partial
+# supplies a DEFAULT only, and lightning 2.6.1 passes weights_only=True
+# explicitly when it restores a checkpoint, overriding it. That is why resume
+# failed despite the monkeypatch and why add_safe_globals is what actually fixed
+# it. Dropping the monkeypatch is a separate decision -- its blast radius is
+# every torch.load in the repo, not just the checkpoint path.
+torch.serialization.add_safe_globals([
+    QSCISampleResult,
+    np.core.multiarray._reconstruct,
+    np.ndarray,
+    np.dtype,
+    np.dtypes.ObjectDType,
+])
 
 torch.load = functools.partial(torch.load, weights_only=False)
 
@@ -125,7 +165,7 @@ def train(cfg):
     seed_everything(cfg.trainer.seed, workers=True)
     callbacks = setup_callbacks(cfg)
     logger = setup_logger(cfg)
-    # The direct / no-circuit arm brings its own factory (direct_qsci), so
+    # The direct / no-circuit pipeline brings its own factory (direct_qsci), so
     # gqe_qsci.factory does not have to know it exists.
     if "direct_qsci" in (getattr(cfg.model, "_target_", "") or ""):
         from direct_qsci.factory import DirectFactory
