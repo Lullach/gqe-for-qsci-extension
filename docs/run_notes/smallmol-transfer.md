@@ -140,6 +140,56 @@ it: the one NaN failure (gpt2-small baseline at epoch 357, beta 7.6) and dag-gnn
 baselines producing fewer distinct circuits per epoch at the end (7.2 of 10 at N2 1.60).
 A run with beta capped or the ramp scaled to the run length would test it.
 
+## Re-sampling the final policies at different beta (2026-11-03)
+
+`hpc/eval_checkpoint_beta.py` loads a final checkpoint (epoch 639, the only one kept)
+and samples the six test geometries zero-shot at fixed beta, the same way
+`_zeroshot_eval` does; 5 batches of 10 circuits per point, all 15 transfer runs.
+Summary: `scratch/explore_beta_eval.py`, data in `scratch/beta_eval/`. At beta 13.3
+it reproduces the values the runs logged at epoch 639 (within noise).
+
+Best circuit of 10, mHa, mean over batches and seeds:
+
+| model | geometry | logged ep 79 (beta ~2) | logged ep 639 (beta 13.3) | beta 0.5 | beta 2 | beta 4 | beta 13.3 |
+|---|---|---|---|---|---|---|---|
+| gpt2-small | N2 1.07 | 44.0 | 53.4 | 32.8 | 26.4 | 32.9 | 43.1 |
+| | N2 1.60 | 37.8 | 41.7 | 84.9 | 58.4 | 44.2 | 46.5 |
+| | N2 2.50 | 21.7 | 44.3 | 88.6 | 36.6 | 26.9 | 37.6 |
+| | CO 1.16 | 38.8 | 40.0 | 50.3 | 43.9 | 44.0 | 47.7 |
+| | CO 1.69 | 44.0 | 64.5 | 72.7 | 57.8 | 50.8 | 49.3 |
+| | CO 2.50 | 13.7 | 43.9 | 14.6 | 14.4 | 12.1 | 37.9 |
+| dag-gnn | N2 1.07 | 48.5 | 73.4 | 34.8 | 42.7 | 49.8 | 89.2 |
+| | N2 1.60 | 71.4 | 144.7 | 111.3 | 76.2 | 84.9 | 146.1 |
+| | N2 2.50 | 43.6 | 140.5 | 146.6 | 98.2 | 121.1 | 154.7 |
+| | CO 1.16 | 51.9 | 61.1 | 50.1 | 52.5 | 53.9 | 80.3 |
+| | CO 1.69 | 67.2 | 100.2 | 102.7 | 65.8 | 63.6 | 73.1 |
+| | CO 2.50 | 19.9 | 16.5 | 19.7 | 15.0 | 17.1 | 19.8 |
+| diff-gnn | N2 1.07 | 49.1 | 43.6 | 28.6 | 40.9 | 42.8 | 42.5 |
+| | N2 1.60 | 33.0 | 28.4 | 30.8 | 30.7 | 29.1 | 29.9 |
+| | N2 2.50 | 36.6 | 30.6 | 16.6 | 9.7 | 12.5 | 17.2 |
+| | CO 1.16 | 45.7 | 51.9 | 42.6 | 44.4 | 49.0 | 50.8 |
+| | CO 1.69 | 59.2 | 53.3 | 35.4 | 32.2 | 35.6 | 35.7 |
+| | CO 2.50 | 13.0 | 15.2 | 13.6 | 15.2 | 15.8 | 16.4 |
+
+(The logged values are single passes of 10 circuits; the re-sampled ones average 5, so
+they are less noisy. Seed spread at beta 8-13.3 is large for gpt2-small and dag-gnn,
+20-140 mHa.)
+
+- **The late degradation is mostly the beta ramp, not the policy.** At beta 2-4 the final
+  gpt2-small policy is back at its epoch-79 level on every geometry (N2 1.07 better:
+  26 vs 44), and dag-gnn on 5 of 6.
+- **Exception: dag-gnn on stretched N2** (2.50 A: 98 at best vs 44 at epoch 79). There
+  the policy itself got worse.
+- **High beta collapses the DAG GNN**: 6-8 distinct circuits of 10 at beta 8-13.3 on N2
+  1.07/1.60 and CO 1.16; the transformer and diff-gnn stay at 10.
+- **diff-gnn barely depends on beta**, which is why it looked stable in training.
+- **No single beta is best**: equilibrium geometries prefer low beta (0.5-2), stretched ones
+  higher (gpt2-small: 4-8). Lower beta flattens the policy toward its prior; higher beta
+  follows what it learned.
+- Practical consequence: cap the beta ramp (around 4) or scale it to the run length;
+  0.5 + 0.02 per epoch was set for 100-epoch runs, where it ends at 2.5. The H-chain run
+  (540 epochs, beta 11.3 at the end) probably suffered from the same thing.
+
 ## Wrong CASCI references for 8 of the 16 training geometries
 
 `PySCFMolecule.compute_casci` (molecule.py, core) calls the CASCI FCI solver for one root.
