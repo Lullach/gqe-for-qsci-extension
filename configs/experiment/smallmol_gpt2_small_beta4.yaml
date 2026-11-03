@@ -1,0 +1,52 @@
+# @package _global_
+# BETA-CAPPED VARIANT of smallmol_gpt2_small: identical except the beta ramp and the tag.
+# The original ramp (start 0.5, +0.02 per epoch) was set for 100-epoch runs, where it
+# ends at 2.5; over 640 epochs it reaches 13.3. Re-sampling the final policies showed
+# the late zero-shot decline is mostly that high beta (docs/run_notes/smallmol-transfer.md).
+# Here delta = (4 - 0.5) / 640, so beta ends at 4.0.
+#
+# SMALL-MOLECULE TRANSFER: train on LiF/BeO/BN/C2, zero-shot on N2/CO (all 16 qubits).
+# Compare with smallmol_base_gpt2_small_<molecule>_<r>: the same model trained from scratch on
+# each test geometry with the same total budget. Their epoch 0 is the untrained control.
+defaults:
+  - override /molecule_set: small_molecules
+  - override /model: gpt2_features
+
+model:
+  size: matched
+
+exp_tag: smallmol-gpt2-small-beta4-s${trainer.seed}
+ngates: 15
+operator_pool:
+  dedup_excitations: true
+wandb:
+  project: ${project.name}
+  name: ${exp_tag}
+  dir: ${output}
+  group: smallmol-transfer
+  tags: ['smallmol', 'transfer', 'beta-capped', 'gpt2-small']
+trainer:
+  max_iters: 640          # 16 training molecules x 40 epochs; baselines get the same total
+  num_samples: 10
+  batch_size: 10
+  warmup_size: 10
+  buffer_size: 10
+  step_per_epoch: 30
+  load_checkpoint: false
+  checkpoint_every_n_iters: 160
+  eval_every: 80          # 8 zero-shot passes
+  precision: 32-true
+  temperature_scheduler:
+    start: 0.5
+    delta: 0.00546875   # (4.0 - 0.5) / 640 -> beta 4.0 at the end
+  optimizer:
+    lr: 2e-5             # best lr of this model in the N2 sweep (tuned on one molecule)
+sampler:
+  shots: 10_000
+qsci:
+  # 2x the worst requirement in the set (BN at 1.25 A: 604/4,900 = 12.3%). The same
+  # fraction for every molecule keeps the reward comparable. Refinement gets close to
+  # exact at this cap, so compare GQE-optimized, not Global-refined.
+  coverage: 0.25
+  max_dim: 2000     # ceiling above 0.25 * 4,900, so coverage decides everywhere
+  min_dim: 50
